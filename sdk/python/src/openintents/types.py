@@ -29,8 +29,8 @@ class PaymentRequest(TypedDict, total=False):
 class SignInRequest(TypedDict, total=False):
     """Where the payer signs in to a shop, so a waiting intent carries on.
 
-    Send url to the payer only: it works for 30 minutes, and whoever has it
-    can sign in for them.
+    Send url to the payer only: it works for 30 minutes, on the first device
+    that opens it.
     """
 
     url: str

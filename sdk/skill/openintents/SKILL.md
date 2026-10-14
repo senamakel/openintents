@@ -46,9 +46,9 @@ Prefer the MCP tools (`create_intent`, `get_intent`, `wait_for_intent`,
      buying and give them `payment.payment_url`. Then wait again
      (`openintents status <id> --wait`).
    - `requires_login`: the shop wants the user signed in to their account
-     there. Give the user `sign_in.url` (theirs only: whoever has it can sign
-     in for them), tell them it works for 30 minutes, and wait again once
-     they say they're done.
+     there. Give the user `sign_in.url` (theirs only: it works on the first
+     device that opens it), tell them it works for 30 minutes, and wait
+     again once they say they're done.
    - `failed`: report `error.message`; ask before retrying.
 
 CLI exit codes: 0 completed, 1 failed or error, 2 needs payment, 3 cancelled,
