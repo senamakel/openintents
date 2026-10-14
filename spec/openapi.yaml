@@ -1456,8 +1456,9 @@ components:
           `{status: requires_login, reason: login_required}`, then
           `{status: queued, reason: signed_in}`. While the agent signs the
           payer in itself, the intent shows `{status: requires_input}` each
-          time it asks them for something, then `{status: running}` once
-          they answer.
+          time it asks them for something (its `reason` the request's
+          `kind`), then `{status: running}` (its `reason` `answered`,
+          `declined`, `approved` or `expired`). Never the answer itself.
         - `step` (intents): `{action}`, what the agent did: `open`, `look`,
           `click`, `type`, `read`.
         - `checkout` (intents): `{merchant, total, currency}`, the payment
