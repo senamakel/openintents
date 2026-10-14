@@ -6,6 +6,22 @@ All three SDKs share one version. Format: [Keep a Changelog](https://keepachange
 
 ### Added
 
+- Agent sign-in: when the shop wants the payer signed in and asks for a
+  phone number or email and then a one-time code, the agent signs them in
+  itself. Each time it needs something only the payer knows, the intent
+  waits in the new status `requires_input` with `input_request` (`id`,
+  `kind`, `shop`, `prompt`, `channel`, `length`, `url`, `expires_at`,
+  `attempts_left`), answered with `POST /intents/{id}/input` (`value`,
+  `decline` or `done`; `409 input_not_waiting` once it has moved on), and
+  `intent.requires_input` webhooks. `sign_in_agent: false` on create turns
+  it off, and `sign_in_hint` passes the payer's phone or email so the agent
+  need not ask. Passwords still go through the sign-in link, now the
+  fallback. All three SDKs: the status, `input_request`, `sign_in_agent`,
+  `sign_in_hint`, the answer (`intents.input` / `answer_intent_input`), and
+  `wait` returning at `requires_input` by default (`returnOnInput` /
+  `return_on_input`). The CLIs print the prompt and exit `5`, and
+  `openintents input` answers.
+
 - Sign-in links: when the shop wants the payer signed in, an intent waits in
   the new status `requires_login` with `sign_in: { url, shop, expires_at }`
   for the payer, instead of failing; `intent.requires_login` webhooks, and
