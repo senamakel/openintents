@@ -34,6 +34,7 @@ from .types import (
     SessionCommandResult,
     SessionList,
     SessionStatus,
+    SignInHint,
     Topup,
 )
 
@@ -180,6 +181,8 @@ def _create_body(
     metadata: Mapping[str, str] | None,
     customer: str | None,
     sign_in_link: bool | None = None,
+    sign_in_agent: bool | None = None,
+    sign_in_hint: SignInHint | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"intent": intent}
     for k, v in (
@@ -190,9 +193,23 @@ def _create_body(
         ("metadata", dict(metadata) if metadata is not None else None),
         ("customer", customer),
         ("sign_in_link", sign_in_link),
+        ("sign_in_agent", sign_in_agent),
+        ("sign_in_hint", dict(sign_in_hint) if sign_in_hint is not None else None),
     ):
         if v is not None:
             body[k] = v
+    return body
+
+
+def _answer_body(input_id: str, value: str | None, decline: bool, done: bool) -> dict[str, Any]:
+    # Only the answer given: the API wants exactly one of value, decline and done.
+    body: dict[str, Any] = {"input": input_id}
+    if value is not None:
+        body["value"] = value
+    if decline:
+        body["decline"] = True
+    if done:
+        body["done"] = True
     return body
 
 
@@ -201,12 +218,13 @@ def _fields(**fields: Any) -> dict[str, Any]:
     return {k: (dict(v) if isinstance(v, Mapping) else v) for k, v in fields.items() if v is not None}
 
 
-def _settled(intent: Intent, return_on_payment: bool, return_on_sign_in: bool) -> bool:
+def _settled(intent: Intent, return_on_payment: bool, return_on_sign_in: bool, return_on_input: bool) -> bool:
     status = intent.get("status")
     return (
         status in FINAL_STATUSES
         or (return_on_payment and status == "requires_payment")
         or (return_on_sign_in and status == "requires_login")
+        or (return_on_input and status == "requires_input")
     )
 
 
@@ -359,11 +377,22 @@ class Intents:
         metadata: Mapping[str, str] | None = None,
         customer: str | None = None,
         sign_in_link: bool | None = None,
+        sign_in_agent: bool | None = None,
+        sign_in_hint: SignInHint | None = None,
         idempotency_key: str | None = None,
     ) -> Intent:
         """Start an intent. Returns immediately, usually with status "queued"."""
         body = _create_body(
-            intent, max_amount, currency, context, require_payment_link, metadata, customer, sign_in_link
+            intent,
+            max_amount,
+            currency,
+            context,
+            require_payment_link,
+            metadata,
+            customer,
+            sign_in_link,
+            sign_in_agent,
+            sign_in_hint,
         )
         return self._c._request(
             "POST", "/intents", json=body, idempotency_key=idempotency_key or str(uuid.uuid4())
@@ -404,6 +433,33 @@ class Intents:
             "POST", f"/intents/{intent_id}/cancel", idempotency_key=idempotency_key or str(uuid.uuid4())
         )
 
+    def input(
+        self,
+        intent_id: str,
+        *,
+        input: str,
+        value: str | None = None,
+        decline: bool = False,
+        done: bool = False,
+        idempotency_key: str | None = None,
+    ) -> Intent:
+        """Answer the intent's input_request while it waits in "requires_input".
+
+        Pass its id as input=, and one of value= (the phone number, email or
+        code), decline=True (the payer would rather not) or done=True (they
+        approved an "approval"). Returns the intent, usually "running" again.
+        A request already answered or expired raises a 409 input_not_waiting.
+
+        >>> request = intent["input_request"]
+        >>> oi.intents.input(intent["id"], input=request["id"], value="481516")
+        """
+        return self._c._request(
+            "POST",
+            f"/intents/{intent_id}/input",
+            json=_answer_body(input, value, decline, done),
+            idempotency_key=idempotency_key or str(uuid.uuid4()),
+        )
+
     def list_events(
         self, intent_id: str, *, limit: int | None = None, cursor: str | None = None
     ) -> EventList:
@@ -431,16 +487,19 @@ class Intents:
         interval: float = 2.0,
         return_on_payment: bool = True,
         return_on_sign_in: bool = True,
+        return_on_input: bool = True,
     ) -> Intent:
         """Poll until the intent is final, or (by default) waits on a person.
 
         On "requires_payment", hand intent["payment"]["payment_url"] to a person.
-        On "requires_login", send intent["sign_in"]["url"] to the payer only.
+        On "requires_input", ask the payer intent["input_request"]["prompt"] and
+        answer with input(). On "requires_login", send intent["sign_in"]["url"]
+        to the payer only.
         """
         deadline = time.monotonic() + timeout
         while True:
             intent = self.get(intent_id)
-            if _settled(intent, return_on_payment, return_on_sign_in):
+            if _settled(intent, return_on_payment, return_on_sign_in, return_on_input):
                 return intent
             if time.monotonic() + interval > deadline:
                 raise WaitTimeoutError(intent_id, timeout)
@@ -826,10 +885,21 @@ class AsyncIntents:
         metadata: Mapping[str, str] | None = None,
         customer: str | None = None,
         sign_in_link: bool | None = None,
+        sign_in_agent: bool | None = None,
+        sign_in_hint: SignInHint | None = None,
         idempotency_key: str | None = None,
     ) -> Intent:
         body = _create_body(
-            intent, max_amount, currency, context, require_payment_link, metadata, customer, sign_in_link
+            intent,
+            max_amount,
+            currency,
+            context,
+            require_payment_link,
+            metadata,
+            customer,
+            sign_in_link,
+            sign_in_agent,
+            sign_in_hint,
         )
         return await self._c._request(
             "POST", "/intents", json=body, idempotency_key=idempotency_key or str(uuid.uuid4())
@@ -869,6 +939,23 @@ class AsyncIntents:
             "POST", f"/intents/{intent_id}/cancel", idempotency_key=idempotency_key or str(uuid.uuid4())
         )
 
+    async def input(
+        self,
+        intent_id: str,
+        *,
+        input: str,
+        value: str | None = None,
+        decline: bool = False,
+        done: bool = False,
+        idempotency_key: str | None = None,
+    ) -> Intent:
+        return await self._c._request(
+            "POST",
+            f"/intents/{intent_id}/input",
+            json=_answer_body(input, value, decline, done),
+            idempotency_key=idempotency_key or str(uuid.uuid4()),
+        )
+
     async def list_events(
         self, intent_id: str, *, limit: int | None = None, cursor: str | None = None
     ) -> EventList:
@@ -888,11 +975,12 @@ class AsyncIntents:
         interval: float = 2.0,
         return_on_payment: bool = True,
         return_on_sign_in: bool = True,
+        return_on_input: bool = True,
     ) -> Intent:
         deadline = time.monotonic() + timeout
         while True:
             intent = await self.get(intent_id)
-            if _settled(intent, return_on_payment, return_on_sign_in):
+            if _settled(intent, return_on_payment, return_on_sign_in, return_on_input):
                 return intent
             if time.monotonic() + interval > deadline:
                 raise WaitTimeoutError(intent_id, timeout)

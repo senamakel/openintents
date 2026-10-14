@@ -131,6 +131,87 @@ def test_wait_keeps_polling_past_a_sign_in_when_asked():
     assert oi.intents.wait("int_1", interval=0, return_on_sign_in=False)["status"] == "completed"
 
 
+INPUT_REQUEST = {
+    "id": "inp_1",
+    "kind": "code",
+    "shop": "blinkit.com",
+    "prompt": "Enter the code blinkit.com just sent to your phone.",
+    "channel": "sms",
+    "length": 6,
+    "url": "https://openintents.io/input/inp_1",
+    "expires_at": "x",
+    "attempts_left": 2,
+}
+
+
+def test_wait_returns_at_requires_input_with_what_to_ask():
+    oi = client(
+        (200, intent(status="running")),
+        (200, intent(status="requires_input", input_request=INPUT_REQUEST)),
+    )
+    got = oi.intents.wait("int_1", interval=0)
+    assert got["status"] == "requires_input"
+    assert got["input_request"] == INPUT_REQUEST
+
+
+def test_wait_keeps_polling_past_an_input_request_when_asked():
+    oi = client(
+        (200, intent(status="requires_input")),
+        (200, intent(status="running")),
+        (200, intent(status="completed")),
+    )
+    assert oi.intents.wait("int_1", interval=0, return_on_input=False)["status"] == "completed"
+
+
+def test_create_sends_sign_in_agent_and_hint():
+    calls = []
+    oi = client((201, intent()), calls=calls)
+    oi.intents.create("a lamp", sign_in_agent=False, sign_in_hint={"phone": "+91 98765 43210"})
+    assert json.loads(calls[0].content) == {
+        "intent": "a lamp",
+        "sign_in_agent": False,
+        "sign_in_hint": {"phone": "+91 98765 43210"},
+    }
+
+
+def test_input_answers_with_a_value_a_decline_or_done():
+    calls = []
+    oi = client((200, intent(status="running")), calls=calls)
+    assert oi.intents.input("int_1", input="inp_1", value="481516")["status"] == "running"
+    assert calls[0].method == "POST" and calls[0].url.path == "/v1/intents/int_1/input"
+    assert len(calls[0].headers["idempotency-key"]) == 36
+    assert json.loads(calls[0].content) == {"input": "inp_1", "value": "481516"}
+    oi.intents.input("int_1", input="inp_1", decline=True)
+    assert json.loads(calls[1].content) == {"input": "inp_1", "decline": True}
+    oi.intents.input("int_1", input="inp_2", done=True)
+    assert json.loads(calls[2].content) == {"input": "inp_2", "done": True}
+
+
+def test_input_too_late_raises_input_not_waiting():
+    oi = client((409, {"error": {"type": "conflict", "code": "input_not_waiting", "message": "Expired."}}))
+    with pytest.raises(OpenIntentsError) as exc:
+        oi.intents.input("int_1", input="inp_1", value="481516")
+    assert exc.value.status == 409
+    assert exc.value.code == "input_not_waiting"
+
+
+async def test_async_input_and_wait_at_requires_input():
+    calls = []
+    handler = transport(
+        (200, intent(status="requires_input", input_request=INPUT_REQUEST)),
+        (200, intent(status="running")),
+        calls=calls,
+    )
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with AsyncOpenIntents("oi_test_x", base_url="https://api.test/v1", http_client=http) as oi:
+        got = await oi.intents.wait("int_1", interval=0)
+        assert got["input_request"]["id"] == "inp_1"
+        answered = await oi.intents.input("int_1", input=got["input_request"]["id"], value="481516")
+        assert answered["status"] == "running"
+    assert calls[1].url.path == "/v1/intents/int_1/input"
+    assert json.loads(calls[1].content) == {"input": "inp_1", "value": "481516"}
+
+
 def test_balance():
     oi = client((200, {"object": "balance", "available": 24450, "currency": "usd"}))
     assert oi.balance.get()["available"] == 24450
