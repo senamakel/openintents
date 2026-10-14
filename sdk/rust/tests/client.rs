@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use openintents::{
-    Client, CreateIntent, CreateTopup, CustomerParams, Error, IntentStatus, ListCustomers, ListIntents, TopupStatus,
-    WaitOptions,
+    AnswerInput, Client, CreateIntent, CreateTopup, CustomerParams, Error, InputChannel, InputKind, IntentStatus,
+    ListCustomers, ListIntents, SignInHint, TopupStatus, WaitOptions,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, header_exists, method, path, query_param};
@@ -178,6 +178,128 @@ async fn wait_keeps_polling_past_a_sign_in_when_asked() {
 fn create_sends_sign_in_link() {
     let body = serde_json::to_value(CreateIntent::new("a lamp").sign_in_link(false)).unwrap();
     assert_eq!(body, json!({ "intent": "a lamp", "sign_in_link": false }));
+}
+
+#[tokio::test]
+async fn wait_returns_the_input_request() {
+    let server = MockServer::start().await;
+    let mut needs_input = intent("requires_input");
+    needs_input["input_request"] = json!({ "id": "inp_1", "kind": "code", "shop": "blinkit.com",
+        "prompt": "Enter the code blinkit.com just sent to your phone.", "channel": "sms", "length": 6,
+        "url": "https://openintents.io/input/inp_1", "expires_at": "x", "attempts_left": 2 });
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(intent("running")))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(needs_input))
+        .mount(&server)
+        .await;
+    let opts = WaitOptions {
+        interval: Duration::from_millis(1),
+        ..Default::default()
+    };
+    let it = client(&server).wait("int_1", opts).await.unwrap();
+    assert_eq!(it.status, IntentStatus::RequiresInput);
+    let request = it.input_request.unwrap();
+    assert_eq!(
+        (request.id.as_str(), request.kind, request.shop.as_str()),
+        ("inp_1", InputKind::Code, "blinkit.com")
+    );
+    assert_eq!(
+        (request.channel, request.length, request.attempts_left),
+        (Some(InputChannel::Sms), Some(6), 2)
+    );
+    assert_eq!(request.prompt, "Enter the code blinkit.com just sent to your phone.");
+}
+
+#[tokio::test]
+async fn wait_keeps_polling_past_an_input_request_when_asked() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(intent("requires_input")))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(intent("completed")))
+        .mount(&server)
+        .await;
+    let opts = WaitOptions {
+        interval: Duration::from_millis(1),
+        return_on_input: false,
+        ..Default::default()
+    };
+    let it = client(&server).wait("int_1", opts).await.unwrap();
+    assert_eq!(it.status, IntentStatus::Completed);
+}
+
+#[test]
+fn create_sends_sign_in_agent_and_hint() {
+    let params = CreateIntent::new("a lamp")
+        .sign_in_agent(false)
+        .sign_in_hint(SignInHint::default().phone("+91 98765 43210"));
+    assert_eq!(
+        serde_json::to_value(params).unwrap(),
+        json!({ "intent": "a lamp", "sign_in_agent": false, "sign_in_hint": { "phone": "+91 98765 43210" } })
+    );
+}
+
+#[tokio::test]
+async fn answers_an_input_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/intents/int_1/input"))
+        .and(header_exists("idempotency-key"))
+        .and(body_json(json!({ "input": "inp_1", "value": "481516" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(intent("running")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let it = client(&server)
+        .answer_intent_input("int_1", AnswerInput::value("inp_1", "481516"))
+        .await
+        .unwrap();
+    assert_eq!(it.status, IntentStatus::Running);
+}
+
+#[test]
+fn answers_serialize_with_exactly_one_of_value_decline_and_done() {
+    let to_json = |answer| serde_json::to_value(answer).unwrap();
+    assert_eq!(
+        to_json(AnswerInput::value("inp_1", "a@b.co")),
+        json!({ "input": "inp_1", "value": "a@b.co" })
+    );
+    assert_eq!(
+        to_json(AnswerInput::decline("inp_1")),
+        json!({ "input": "inp_1", "decline": true })
+    );
+    assert_eq!(
+        to_json(AnswerInput::done("inp_2")),
+        json!({ "input": "inp_2", "done": true })
+    );
+}
+
+#[tokio::test]
+async fn an_answer_too_late_is_input_not_waiting() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/intents/int_1/input"))
+        .respond_with(ResponseTemplate::new(409).set_body_json(
+            json!({ "error": { "type": "conflict", "code": "input_not_waiting", "message": "Expired." } }),
+        ))
+        .mount(&server)
+        .await;
+    match client(&server)
+        .answer_intent_input("int_1", AnswerInput::decline("inp_1"))
+        .await
+    {
+        Err(Error::Api { status, code, .. }) => {
+            assert_eq!((status, code.as_deref()), (409, Some("input_not_waiting")));
+        }
+        other => panic!("expected an API error, got {other:?}"),
+    }
 }
 
 #[tokio::test]

@@ -8,9 +8,10 @@ use serde::Deserialize;
 use crate::error::{Error, Result};
 use crate::stream::EventStream;
 use crate::types::{
-    Balance, CreateIntent, CreateProfile, CreateSession, CreateTopup, Customer, CustomerList, CustomerParams,
-    EventList, Intent, IntentList, IntentStatus, ListCustomers, ListEvents, ListIntents, ListProfiles, ListSessions,
-    Profile, ProfileLease, ProfileList, Session, SessionCommand, SessionCommandResult, SessionList, Topup,
+    AnswerInput, Balance, CreateIntent, CreateProfile, CreateSession, CreateTopup, Customer, CustomerList,
+    CustomerParams, EventList, Intent, IntentList, IntentStatus, ListCustomers, ListEvents, ListIntents, ListProfiles,
+    ListSessions, Profile, ProfileLease, ProfileList, Session, SessionCommand, SessionCommandResult, SessionList,
+    Topup,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://api.openintents.io/v1";
@@ -56,6 +57,10 @@ pub struct WaitOptions {
     /// (default true), so they can be sent `sign_in.url`. False keeps waiting
     /// until it is final.
     pub return_on_sign_in: bool,
+    /// Return when the intent waits for its payer to answer what the agent
+    /// asks while it signs them in (default true), so they can be asked
+    /// `input_request.prompt`. False keeps waiting until it is final.
+    pub return_on_input: bool,
 }
 
 impl Default for WaitOptions {
@@ -65,6 +70,7 @@ impl Default for WaitOptions {
             interval: Duration::from_secs(2),
             return_on_payment: true,
             return_on_sign_in: true,
+            return_on_input: true,
         }
     }
 }
@@ -137,6 +143,30 @@ impl Client {
         let key = uuid::Uuid::new_v4().to_string();
         self.send(Method::POST, &format!("/intents/{id}/cancel"), Some(&key), |r| r)
             .await
+    }
+
+    /// Answer the intent's `input_request` while it waits in
+    /// `requires_input`. Returns the intent, usually `running` again. A
+    /// request already answered or expired is a 409 `input_not_waiting`.
+    /// Sends a fresh Idempotency-Key, so a retry never answers twice.
+    ///
+    /// ```no_run
+    /// # async fn run(oi: openintents::Client, intent: openintents::Intent) -> openintents::Result<()> {
+    /// use openintents::AnswerInput;
+    ///
+    /// if let Some(request) = &intent.input_request {
+    ///     // Ask the payer `request.prompt`, then:
+    ///     oi.answer_intent_input(&intent.id, AnswerInput::value(&request.id, "481516"))
+    ///         .await?;
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn answer_intent_input(&self, id: &str, answer: AnswerInput) -> Result<Intent> {
+        let key = uuid::Uuid::new_v4().to_string();
+        self.send(Method::POST, &format!("/intents/{id}/input"), Some(&key), |r| {
+            r.json(&answer)
+        })
+        .await
     }
 
     /// The agent balance intents pay from, and this month's spend.
@@ -335,13 +365,14 @@ impl Client {
     }
 
     /// Poll until the intent is final, or (by default) waits on a person: its
-    /// payment, or its payer's sign-in.
+    /// payment, an answer from its payer, or its payer's sign-in.
     pub async fn wait(&self, id: &str, opts: WaitOptions) -> Result<Intent> {
         let deadline = Instant::now() + opts.timeout;
         loop {
             let intent = self.get_intent(id).await?;
             let waits_on_person = (opts.return_on_payment && intent.status == IntentStatus::RequiresPayment)
-                || (opts.return_on_sign_in && intent.status == IntentStatus::RequiresLogin);
+                || (opts.return_on_sign_in && intent.status == IntentStatus::RequiresLogin)
+                || (opts.return_on_input && intent.status == IntentStatus::RequiresInput);
             if intent.status.is_final() || waits_on_person {
                 return Ok(intent);
             }

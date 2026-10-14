@@ -1,11 +1,12 @@
 //! `openintents` CLI (build with `--features cli`). Same commands and exit
 //! codes as the npm CLI: 0 completed, 1 failed or error, 2 needs payment,
-//! 3 cancelled.
+//! 3 cancelled, 4 needs the payer to sign in, 5 needs an answer from the
+//! payer.
 
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
-use openintents::{Client, CreateIntent, Intent, IntentStatus, ListIntents};
+use clap::{Args, Parser, Subcommand};
+use openintents::{AnswerInput, Client, CreateIntent, InputKind, Intent, IntentStatus, ListIntents};
 
 #[derive(Parser)]
 #[command(name = "openintents", version, about = "The agentic API to buy anything")]
@@ -45,10 +46,34 @@ enum Command {
     },
     /// Cancel an intent that hasn't paid.
     Cancel { id: String },
+    /// Answer what an intent asks the payer for while the agent signs them in.
+    Input {
+        id: String,
+        /// The ID of the intent's input request.
+        #[arg(long)]
+        input: String,
+        #[command(flatten)]
+        answer: Answer,
+    },
     /// Print an intent's payment link.
     Pay { id: String },
     /// Show the agent balance.
     Balance,
+}
+
+/// Exactly one answer to an input request.
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+struct Answer {
+    /// The phone number, email or code.
+    #[arg(long)]
+    value: Option<String>,
+    /// The payer would rather not.
+    #[arg(long)]
+    decline: bool,
+    /// The payer approved the sign-in (for an approval).
+    #[arg(long)]
+    done: bool,
 }
 
 fn exit_for(status: IntentStatus) -> u8 {
@@ -57,6 +82,7 @@ fn exit_for(status: IntentStatus) -> u8 {
         IntentStatus::RequiresPayment => 2,
         IntentStatus::Cancelled => 3,
         IntentStatus::RequiresLogin => 4,
+        IntentStatus::RequiresInput => 5,
         _ => 0,
     }
 }
@@ -73,6 +99,19 @@ fn show(intent: &Intent, json: bool) {
     if let Some(s) = &intent.sign_in {
         println!("  sign-in needed at {}: send this link to the payer only", s.shop);
         println!("  sign in here: {}", s.url);
+    }
+    if let Some(r) = &intent.input_request {
+        let answer = if r.kind == InputKind::Approval {
+            "--done"
+        } else {
+            "--value <answer>"
+        };
+        println!("  input needed at {}, ask the payer: {}", r.shop, r.prompt);
+        println!(
+            "  answer: openintents input {} --input {} {answer} (or --decline)",
+            intent.id, r.id
+        );
+        println!("  or the payer answers here (theirs only): {}", r.url);
     }
     if let Some(r) = &intent.result {
         println!("  {}: {} {} (fee {})", r.merchant, r.total, r.currency, r.fee);
@@ -132,6 +171,16 @@ async fn run(cli: Cli) -> openintents::Result<u8> {
         }
         Command::Cancel { id } => {
             let it = oi.cancel_intent(&id).await?;
+            show(&it, json);
+            exit_for(it.status)
+        }
+        Command::Input { id, input, answer } => {
+            let answer = match answer {
+                Answer { value: Some(value), .. } => AnswerInput::value(input, value),
+                Answer { decline: true, .. } => AnswerInput::decline(input),
+                _ => AnswerInput::done(input),
+            };
+            let it = oi.answer_intent_input(&id, answer).await?;
             show(&it, json);
             exit_for(it.status)
         }
