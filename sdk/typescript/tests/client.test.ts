@@ -135,6 +135,76 @@ describe("OpenIntents client", () => {
     expect(JSON.parse(String(calls[0]!.init?.body))).toMatchObject({ intent: "a lamp", sign_in_link: false });
   });
 
+  it("wait returns at requires_input by default, with what to ask", async () => {
+    const inputRequest = {
+      id: "inp_1",
+      kind: "code" as const,
+      shop: "blinkit.com",
+      prompt: "Enter the code blinkit.com just sent to your phone.",
+      channel: "sms" as const,
+      length: 6,
+      url: "https://openintents.io/input/inp_1",
+      expires_at: "x",
+      attempts_left: 2,
+    };
+    const { fetch } = mockFetch(
+      { body: intent({ status: "running" }) },
+      { body: intent({ status: "requires_input", input_request: inputRequest }) },
+    );
+    const got = await make(fetch).intents.wait("int_1", { intervalMs: 1 });
+    expect(got.status).toBe("requires_input");
+    expect(got.input_request).toEqual(inputRequest);
+  });
+
+  it("wait keeps polling past an input request when asked", async () => {
+    const { fetch } = mockFetch(
+      { body: intent({ status: "requires_input" }) },
+      { body: intent({ status: "running" }) },
+      { body: intent({ status: "completed" }) },
+    );
+    const got = await make(fetch).intents.wait("int_1", { intervalMs: 1, returnOnInput: false });
+    expect(got.status).toBe("completed");
+  });
+
+  it("sends sign_in_agent and sign_in_hint when creating an intent", async () => {
+    const { fetch, calls } = mockFetch({ status: 201, body: intent({ status: "queued" }) });
+    await make(fetch).intents.create({ intent: "a lamp", sign_in_agent: false, sign_in_hint: { phone: "+91 98765 43210" } });
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({
+      intent: "a lamp",
+      sign_in_agent: false,
+      sign_in_hint: { phone: "+91 98765 43210" },
+    });
+  });
+
+  it("answers an input request with a value, a decline or done", async () => {
+    const running = { body: intent({ status: "running" }) };
+    const { fetch, calls } = mockFetch(running, running, running);
+    const oi = make(fetch);
+    const got = await oi.intents.input("int_1", { input: "inp_1", value: "481516" });
+    expect(got.status).toBe("running");
+    const { url, init } = calls[0]!;
+    expect(url).toBe("https://api.test/v1/intents/int_1/input");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(JSON.parse(init.body as string)).toEqual({ input: "inp_1", value: "481516" });
+    await oi.intents.input("int_1", { input: "inp_1", decline: true });
+    expect(JSON.parse(calls[1]!.init.body as string)).toEqual({ input: "inp_1", decline: true });
+    await oi.intents.input("int_1", { input: "inp_2", done: true });
+    expect(JSON.parse(calls[2]!.init.body as string)).toEqual({ input: "inp_2", done: true });
+  });
+
+  it("throws input_not_waiting for an answer that comes too late", async () => {
+    const { fetch } = mockFetch({
+      status: 409,
+      body: { error: { type: "conflict", code: "input_not_waiting", message: "That request has expired." } },
+    });
+    const err = await make(fetch)
+      .intents.input("int_1", { input: "inp_1", value: "481516" })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OpenIntentsError);
+    expect((err as OpenIntentsError).code).toBe("input_not_waiting");
+  });
+
   it("wait times out", async () => {
     const { fetch } = mockFetch({ body: intent({ status: "running" }) });
     await expect(make(fetch).intents.wait("int_1", { intervalMs: 5, timeoutMs: 1 })).rejects.toBeInstanceOf(WaitTimeoutError);

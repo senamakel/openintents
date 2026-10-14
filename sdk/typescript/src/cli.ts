@@ -12,7 +12,7 @@ import { parseArgs } from "node:util";
 
 import { OpenIntents } from "./client.js";
 import { OpenIntentsError, WaitTimeoutError } from "./errors.js";
-import type { Intent, IntentStatus } from "./types.js";
+import type { AnswerInputParams, Intent, IntentStatus } from "./types.js";
 import { VERSION } from "./version.js";
 
 const DASHBOARD_KEYS_URL = "https://openintents.io/dashboard/api-keys";
@@ -29,7 +29,10 @@ const EXIT: Record<IntentStatus | "error", number> = {
   requires_payment: 2,
   cancelled: 3,
   requires_login: 4,
+  requires_input: 5,
 };
+
+const INPUT_USAGE = "Usage: openintents input <id> --input <input id> (--value <answer> | --decline | --done)";
 
 const HELP = `openintents ${VERSION}: the agentic API to buy anything
 
@@ -38,13 +41,16 @@ Usage:
   openintents status <id> [--wait]
   openintents list [--status <status>] [--limit <n>]
   openintents cancel <id>
+  openintents input <id> --input <input id> (--value <answer> | --decline | --done)
+                                answer what the intent asks the payer for
   openintents pay <id>          open the intent's payment link
   openintents balance
   openintents login             save an API key to ${CONFIG_FILE}
 
 Every command takes --json for one JSON object per line.
 Auth: OPENINTENTS_API_KEY, or the key saved by \`openintents login\`.
-Exit codes: 0 completed, 1 failed or error, 2 needs payment, 3 cancelled.`;
+Exit codes: 0 completed, 1 failed or error, 2 needs payment, 3 cancelled,
+4 needs the payer to sign in, 5 needs an answer from the payer.`;
 
 async function savedKey(): Promise<string | undefined> {
   try {
@@ -81,6 +87,13 @@ function describe(intent: Intent): string {
     lines.push(`  sign-in needed at ${intent.sign_in.shop}: send this link to the payer only`);
     lines.push(`  sign in here: ${intent.sign_in.url}`);
   }
+  if (intent.input_request) {
+    const r = intent.input_request;
+    const answer = r.kind === "approval" ? "--done" : "--value <answer>";
+    lines.push(`  input needed at ${r.shop}, ask the payer: ${r.prompt}`);
+    lines.push(`  answer: openintents input ${intent.id} --input ${r.id} ${answer} (or --decline)`);
+    lines.push(`  or the payer answers here (theirs only): ${r.url}`);
+  }
   if (intent.result) {
     const r = intent.result;
     lines.push(`  ${r.merchant}: ${money(r.total, r.currency)} (+${money(r.fee, r.currency)} fee)${r.confirmation ? `, confirmation ${r.confirmation}` : ""}`);
@@ -105,6 +118,10 @@ async function main(argv: string[]): Promise<number> {
       "payment-link": { type: "boolean", default: false },
       status: { type: "string" },
       limit: { type: "string" },
+      input: { type: "string" },
+      value: { type: "string" },
+      decline: { type: "boolean", default: false },
+      done: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
     },
@@ -162,6 +179,20 @@ async function main(argv: string[]): Promise<number> {
     case "cancel": {
       if (!arg) throw new Error("Usage: openintents cancel <id>");
       const intent = await (await client()).intents.cancel(arg);
+      print(intent, json, () => describe(intent));
+      return EXIT[intent.status];
+    }
+    case "input": {
+      const input = values.input;
+      const given = [values.value !== undefined, values.decline, values.done].filter(Boolean).length;
+      if (!arg || !input || given !== 1) throw new Error(INPUT_USAGE);
+      const params: AnswerInputParams =
+        values.value !== undefined
+          ? { input, value: values.value }
+          : values.decline
+            ? { input, decline: true }
+            : { input, done: true };
+      const intent = await (await client()).intents.input(arg, params);
       print(intent, json, () => describe(intent));
       return EXIT[intent.status];
     }
