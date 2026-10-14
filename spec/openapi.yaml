@@ -985,7 +985,8 @@ components:
         Where the payer signs in to a shop, so a waiting intent carries on.
         Send `url` to the payer only, and don't open it yourself: it works for
         30 minutes, on the first device that opens it, and any other device
-        sees only that it is in use. They see the shop's own sign-in page, in
+        sees only that it is in use, unless the first one leaves it alone for
+        a few minutes. They see the shop's own sign-in page, in
         their browser that OpenIntents runs, which never pays, places orders
         or enters card details. Once they sign in, the intent goes back to
         `queued` (reason `signed_in`); if they decline or the link expires,
