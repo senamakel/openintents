@@ -439,7 +439,8 @@ paths:
         (`profile_busy`), and the error's `lease` says what uses it and when
         its lease next runs out. A profile is free while its intent waits in
         `requires_payment`: a session opened then can change the cart that
-        intent resumes with.
+        intent resumes with. While an intent waits in `requires_login`, its
+        payer's sign-in may be using the profile.
 
         A session never enters payment details (see `SessionCommand`). Test
         and live keys can both open one.
@@ -855,7 +856,11 @@ components:
   schemas:
     IntentStatus:
       type: string
-      enum: [queued, running, requires_payment, completed, failed, cancelled]
+      description: |
+        `requires_payment` and `requires_login` wait on a person: the payer
+        pays the payment link, or signs in to the shop on the sign-in link.
+        `completed`, `failed` and `cancelled` are final.
+      enum: [queued, running, requires_payment, requires_login, completed, failed, cancelled]
 
     CreateIntentParams:
       type: object
@@ -883,6 +888,14 @@ components:
         require_payment_link:
           type: boolean
           description: Always return a payment link instead of paying from the balance.
+        sign_in_link:
+          type: boolean
+          default: true
+          description: |
+            When the shop wants the payer signed in: `true` waits in
+            `requires_login` with a sign-in link for them; `false` fails the
+            intent with `login_required` at once, for callers who sign payers
+            in themselves with sessions.
         customer:
           type: string
           description: |
@@ -921,6 +934,11 @@ components:
         payment:
           oneOf:
             - $ref: "#/components/schemas/PaymentRequest"
+            - type: "null"
+        sign_in:
+          description: Set while `requires_login`.
+          oneOf:
+            - $ref: "#/components/schemas/SignInRequest"
             - type: "null"
         result:
           oneOf:
@@ -961,6 +979,28 @@ components:
           type: string
           format: date-time
 
+    SignInRequest:
+      type: object
+      description: |
+        Where the payer signs in to a shop, so a waiting intent carries on.
+        Send `url` to the payer only: it works for 30 minutes, and whoever
+        has it can sign in for them. They see the shop's own sign-in page, in
+        their browser that OpenIntents runs, which never pays, places orders
+        or enters card details. Once they sign in, the intent goes back to
+        `queued` (reason `signed_in`); if they decline or the link expires,
+        it fails with `login_required`. Nothing is charged either way.
+      required: [url, shop, expires_at]
+      properties:
+        url:
+          type: string
+          format: uri
+        shop:
+          type: string
+          description: The shop's domain, such as `amazon.com`.
+        expires_at:
+          type: string
+          format: date-time
+
     Receipt:
       type: object
       required: [merchant, total, fee, currency]
@@ -997,7 +1037,7 @@ components:
       properties:
         code:
           type: string
-          examples: [over_max_amount, out_of_stock, merchant_unavailable]
+          examples: [over_max_amount, out_of_stock, merchant_unavailable, login_required]
         message:
           type: string
 
@@ -1085,6 +1125,7 @@ components:
           enum:
             - intent.running
             - intent.requires_payment
+            - intent.requires_login
             - intent.completed
             - intent.failed
             - intent.cancelled
@@ -1223,7 +1264,10 @@ components:
           paid intent is queued again, and `payment_expired` when its unpaid
           link expired. A run that moved to a fresh browser shows
           `{status: queued, reason: browser_lost}`; one sent again to get past
-          a shop's check, `{status: queued, reason: retrying}`.
+          a shop's check, `{status: queued, reason: retrying}`. An intent that
+          waits for its payer to sign in shows
+          `{status: requires_login, reason: login_required}`, then
+          `{status: queued, reason: signed_in}`.
         - `step` (intents): `{action}`, what the agent did: `open`, `look`,
           `click`, `type`, `read`.
         - `checkout` (intents): `{merchant, total, currency}`, the payment
