@@ -6,13 +6,18 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::stream::EventStream;
 use crate::types::{
-    Balance, CreateIntent, CreateTopup, Customer, CustomerList, CustomerParams, Intent, IntentList, IntentStatus,
-    ListCustomers, ListIntents, Topup,
+    Balance, CreateIntent, CreateProfile, CreateSession, CreateTopup, Customer, CustomerList, CustomerParams,
+    EventList, Intent, IntentList, IntentStatus, ListCustomers, ListEvents, ListIntents, ListProfiles, ListSessions,
+    Profile, ProfileLease, ProfileList, Session, SessionCommand, SessionCommandResult, SessionList, Topup,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://api.openintents.io/v1";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// A stream with no event and no keep-alive for this long (or the client
+/// timeout, if longer) is dropped and resumed.
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Client for the OpenIntents agentic API.
 ///
@@ -33,7 +38,8 @@ pub struct Client {
     http: reqwest::Client,
     api_key: String,
     base_url: String,
-    max_retries: u32,
+    timeout: Duration,
+    pub(crate) max_retries: u32,
 }
 
 /// Options for [`Client::wait`].
@@ -70,6 +76,7 @@ struct ErrorDetail {
     code: Option<String>,
     message: Option<String>,
     param: Option<String>,
+    lease: Option<ProfileLease>,
 }
 
 impl Client {
@@ -181,6 +188,147 @@ impl Client {
         self.send(Method::GET, &format!("/topups/{id}"), None, |r| r).await
     }
 
+    /// A page of the intent's timeline, oldest first: status changes, the
+    /// agent's steps, its checkout.
+    pub async fn list_intent_events(&self, id: &str, params: &ListEvents) -> Result<EventList> {
+        self.send(Method::GET, &format!("/intents/{id}/events"), None, |r| r.query(params))
+            .await
+    }
+
+    /// Follow the intent's timeline live: past events first, then new ones as
+    /// they happen, after `last_event_id` if given. The stream resumes by
+    /// itself after a dropped connection, and ends once the intent is over and
+    /// its last event was sent.
+    ///
+    /// ```no_run
+    /// # async fn run(oi: openintents::Client) -> openintents::Result<()> {
+    /// let mut events = oi.stream_intent_events("int_7f3a2c", None);
+    /// while let Some(event) = events.next().await {
+    ///     let event = event?;
+    ///     println!("{} {}", event.kind, event.data);
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub fn stream_intent_events(&self, id: &str, last_event_id: Option<&str>) -> EventStream {
+        EventStream::new(self.clone(), format!("/intents/{id}/events"), last_event_id)
+    }
+
+    /// Your account's profile and your customers' that exist so far, newest first.
+    pub async fn list_profiles(&self, params: &ListProfiles) -> Result<ProfileList> {
+        self.send(Method::GET, "/profiles", None, |r| r.query(params)).await
+    }
+
+    /// Make the profile of your account, or of a customer, ahead of its first
+    /// intent or session. Optional: an intent makes the profile it needs.
+    /// Making one that exists returns it unchanged, so no Idempotency-Key is
+    /// sent.
+    pub async fn create_profile(&self, params: CreateProfile) -> Result<Profile> {
+        self.send(Method::POST, "/profiles", None, |r| r.json(&params)).await
+    }
+
+    pub async fn get_profile(&self, id: &str) -> Result<Profile> {
+        self.send(Method::GET, &format!("/profiles/{id}"), None, |r| r).await
+    }
+
+    /// Erase everything the profile kept: logins, cookies, saved data. Returns
+    /// it `forgetting`, then it turns `forgotten`. Forgetting twice is fine.
+    pub async fn forget_profile(&self, id: &str) -> Result<Profile> {
+        self.send(Method::DELETE, &format!("/profiles/{id}"), None, |r| r).await
+    }
+
+    /// Open a browser on a profile without an intent. A profile in use is a
+    /// 409 `profile_busy` whose `lease` says what holds it. Sends a fresh
+    /// Idempotency-Key; use [`Client::create_session_idempotent`] to set your own.
+    pub async fn create_session(&self, params: CreateSession) -> Result<Session> {
+        self.create_session_idempotent(params, &uuid::Uuid::new_v4().to_string())
+            .await
+    }
+
+    pub async fn create_session_idempotent(&self, params: CreateSession, idempotency_key: &str) -> Result<Session> {
+        self.send(Method::POST, "/sessions", Some(idempotency_key), |r| r.json(&params))
+            .await
+    }
+
+    pub async fn get_session(&self, id: &str) -> Result<Session> {
+        self.send(Method::GET, &format!("/sessions/{id}"), None, |r| r).await
+    }
+
+    /// Newest first.
+    pub async fn list_sessions(&self, params: &ListSessions) -> Result<SessionList> {
+        self.send(Method::GET, "/sessions", None, |r| r.query(params)).await
+    }
+
+    /// Close the browser, keeping what the session changed in the profile. A
+    /// session that already ended is returned unchanged.
+    pub async fn release_session(&self, id: &str) -> Result<Session> {
+        let key = uuid::Uuid::new_v4().to_string();
+        self.send(Method::POST, &format!("/sessions/{id}/release"), Some(&key), |r| r)
+            .await
+    }
+
+    /// Run one command on the session's page. It waits up to 20 seconds; a
+    /// command still running then comes back `Pending`, to follow with
+    /// [`Client::get_session_command`]. A refused or failed one says why in
+    /// `error`. Sends a fresh Idempotency-Key, so a retry never runs it twice;
+    /// use [`Client::run_session_command_idempotent`] to set your own.
+    pub async fn run_session_command(&self, id: &str, command: SessionCommand) -> Result<SessionCommandResult> {
+        self.run_session_command_idempotent(id, command, &uuid::Uuid::new_v4().to_string())
+            .await
+    }
+
+    pub async fn run_session_command_idempotent(
+        &self,
+        id: &str,
+        command: SessionCommand,
+        idempotency_key: &str,
+    ) -> Result<SessionCommandResult> {
+        self.send(
+            Method::POST,
+            &format!("/sessions/{id}/commands"),
+            Some(idempotency_key),
+            |r| r.json(&command),
+        )
+        .await
+    }
+
+    pub async fn get_session_command(&self, id: &str, command_id: &str) -> Result<SessionCommandResult> {
+        self.send(
+            Method::GET,
+            &format!("/sessions/{id}/commands/{command_id}"),
+            None,
+            |r| r,
+        )
+        .await
+    }
+
+    /// A screenshot of the session's page, taken now: JPEG bytes.
+    pub async fn session_screenshot(&self, id: &str) -> Result<Vec<u8>> {
+        let res = self
+            .send_raw(
+                Method::GET,
+                &format!("/sessions/{id}/screenshot"),
+                None,
+                "image/jpeg",
+                |r| r,
+            )
+            .await?;
+        Ok(res.bytes().await?.to_vec())
+    }
+
+    /// A page of the session's timeline, oldest first: status changes, pages
+    /// and commands.
+    pub async fn list_session_events(&self, id: &str, params: &ListEvents) -> Result<EventList> {
+        self.send(Method::GET, &format!("/sessions/{id}/events"), None, |r| {
+            r.query(params)
+        })
+        .await
+    }
+
+    /// Follow the session's timeline live, like [`Client::stream_intent_events`].
+    pub fn stream_session_events(&self, id: &str, last_event_id: Option<&str>) -> EventStream {
+        EventStream::new(self.clone(), format!("/sessions/{id}/events"), last_event_id)
+    }
+
     /// Poll until the intent is final, or (by default) needs payment.
     pub async fn wait(&self, id: &str, opts: WaitOptions) -> Result<Intent> {
         let deadline = Instant::now() + opts.timeout;
@@ -206,17 +354,27 @@ impl Client {
         idempotency_key: Option<&str>,
         build: impl Fn(RequestBuilder) -> RequestBuilder,
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
+        let res = self
+            .send_raw(method, path, idempotency_key, "application/json", build)
+            .await?;
+        Ok(res.json().await?)
+    }
+
+    /// Sends a request, retrying 429, 5xx and connection errors with backoff,
+    /// and returns the 2xx response.
+    async fn send_raw(
+        &self,
+        method: Method,
+        path: &str,
+        idempotency_key: Option<&str>,
+        accept: &str,
+        build: impl Fn(RequestBuilder) -> RequestBuilder,
+    ) -> Result<reqwest::Response> {
         let mut attempt = 0;
         loop {
-            let mut req = self
-                .http
-                .request(method.clone(), &url)
-                .bearer_auth(&self.api_key)
-                .header(header::ACCEPT, "application/json");
-            if let Some(key) = idempotency_key {
-                req = req.header("Idempotency-Key", key);
-            }
+            let req = self
+                .request(method.clone(), path, accept, idempotency_key)
+                .timeout(self.timeout);
             let res = match build(req).send().await {
                 Ok(res) => res,
                 Err(err) if attempt < self.max_retries && (err.is_connect() || err.is_timeout()) => {
@@ -228,46 +386,82 @@ impl Client {
             };
             let status = res.status();
             if status.is_success() {
-                return Ok(res.json().await?);
+                return Ok(res);
             }
-            if (status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) && attempt < self.max_retries {
-                let retry_after = res
-                    .headers()
-                    .get(header::RETRY_AFTER)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<f64>().ok());
-                tokio::time::sleep(backoff(attempt, retry_after)).await;
+            if retryable(status) && attempt < self.max_retries {
+                tokio::time::sleep(backoff(attempt, retry_after(&res))).await;
                 attempt += 1;
                 continue;
             }
-            let request_id = res
-                .headers()
-                .get("request-id")
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_string);
-            let detail = res.json::<ErrorBody>().await.ok().and_then(|b| b.error);
-            return Err(Error::Api {
-                status: status.as_u16(),
-                kind: detail.as_ref().and_then(|d| d.kind.clone()).unwrap_or_else(|| {
-                    if status.is_server_error() {
-                        "api_error"
-                    } else {
-                        "invalid_request"
-                    }
-                    .into()
-                }),
-                code: detail.as_ref().and_then(|d| d.code.clone()),
-                param: detail.as_ref().and_then(|d| d.param.clone()),
-                message: detail
-                    .and_then(|d| d.message)
-                    .unwrap_or_else(|| format!("HTTP {}", status.as_u16())),
-                request_id,
-            });
+            return Err(api_error(res).await);
         }
+    }
+
+    /// A request with the key and the headers every call sends. Without a
+    /// per-request timeout, only the client's connect and read timeouts apply,
+    /// which is what an event stream needs.
+    pub(crate) fn request(
+        &self,
+        method: Method,
+        path: &str,
+        accept: &str,
+        idempotency_key: Option<&str>,
+    ) -> RequestBuilder {
+        let mut req = self
+            .http
+            .request(method, format!("{}{}", self.base_url, path))
+            .bearer_auth(&self.api_key)
+            .header(header::ACCEPT, accept);
+        if let Some(key) = idempotency_key {
+            req = req.header("Idempotency-Key", key);
+        }
+        req
     }
 }
 
-fn backoff(attempt: u32, retry_after: Option<f64>) -> Duration {
+pub(crate) fn retryable(status: StatusCode) -> bool {
+    status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+}
+
+pub(crate) fn retry_after(res: &reqwest::Response) -> Option<f64> {
+    res.headers()
+        .get(header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<f64>().ok())
+}
+
+/// Turns a non-2xx response into [`Error::Api`].
+pub(crate) async fn api_error(res: reqwest::Response) -> Error {
+    let status = res.status();
+    let request_id = res
+        .headers()
+        .get("request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let detail = res.json::<ErrorBody>().await.ok().and_then(|b| b.error);
+    let (kind, code, param, message, lease) = match detail {
+        Some(d) => (d.kind, d.code, d.param, d.message, d.lease),
+        None => (None, None, None, None, None),
+    };
+    Error::Api {
+        status: status.as_u16(),
+        kind: kind.unwrap_or_else(|| {
+            if status.is_server_error() {
+                "api_error"
+            } else {
+                "invalid_request"
+            }
+            .into()
+        }),
+        code,
+        param,
+        message: message.unwrap_or_else(|| format!("HTTP {}", status.as_u16())),
+        lease,
+        request_id,
+    }
+}
+
+pub(crate) fn backoff(attempt: u32, retry_after: Option<f64>) -> Duration {
     if let Some(secs) = retry_after.filter(|s| *s > 0.0) {
         return Duration::from_secs_f64(secs);
     }
@@ -303,8 +497,12 @@ impl ClientBuilder {
     }
 
     pub fn build(self) -> Client {
+        // Each request sets its own total timeout, but an event stream lives
+        // longer: the read timeout only drops one that stalls, as keep-alives
+        // reset it.
         let http = reqwest::Client::builder()
-            .timeout(self.timeout)
+            .connect_timeout(self.timeout)
+            .read_timeout(self.timeout.max(STREAM_IDLE_TIMEOUT))
             .user_agent(format!("openintents-rust/{VERSION}"))
             .build()
             .expect("reqwest client with rustls builds");
@@ -312,6 +510,7 @@ impl ClientBuilder {
             http,
             api_key: self.api_key,
             base_url: self.base_url,
+            timeout: self.timeout,
             max_retries: self.max_retries,
         }
     }

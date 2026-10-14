@@ -1,3 +1,5 @@
+import type { ProfileLease } from "./types.js";
+
 /** Error types returned by the API (`error.type` in the response body). */
 export type ApiErrorType =
   | "invalid_request"
@@ -12,8 +14,11 @@ export type ApiErrorType =
 export class OpenIntentsError extends Error {
   readonly status: number;
   readonly type: ApiErrorType | "network";
+  /** A finer reason, such as `profile_busy`, `session_limit` or `session_not_open`. */
   readonly code?: string;
   readonly param?: string;
+  /** With `profile_busy`: what uses the profile and when its lease next runs out. */
+  readonly lease?: ProfileLease;
   readonly requestId?: string;
 
   constructor(opts: {
@@ -22,6 +27,7 @@ export class OpenIntentsError extends Error {
     type: ApiErrorType | "network";
     code?: string;
     param?: string;
+    lease?: ProfileLease;
     requestId?: string;
   }) {
     super(opts.message);
@@ -30,6 +36,7 @@ export class OpenIntentsError extends Error {
     this.type = opts.type;
     this.code = opts.code;
     this.param = opts.param;
+    this.lease = opts.lease;
     this.requestId = opts.requestId;
   }
 }

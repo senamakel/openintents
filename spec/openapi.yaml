@@ -14,8 +14,7 @@ info:
     browser while it works.
 
     **Preview.** This spec describes the API as it is being built. Endpoints
-    and payloads may change before launch. Operations marked **Preview, not
-    yet available** are designed but not served yet.
+    and payloads may change before launch.
 
     Conventions:
     - Amounts are integers in the smallest currency unit (cents for USD).
@@ -28,8 +27,7 @@ info:
     - Test and live keys work on the same customers, intents, balances and
       profiles; `test` on an intent or a session says which kind of key made
       it. Only live keys move money.
-    - Event streams (preview) are Server-Sent Events: send
-      `Accept: text/event-stream`.
+    - Event streams are Server-Sent Events: send `Accept: text/event-stream`.
     - Expect new fields, new enum values and new event types; ignore the ones
       you don't know.
   license:
@@ -135,11 +133,10 @@ paths:
       operationId: listIntentEvents
       summary: Follow an intent's progress
       description: |
-        **Preview, not yet available.** The intent's timeline, oldest first:
-        status changes, the agent's steps, and its checkout (see `Event`).
-        `limit` and `cursor` page the JSON list. With
-        `Accept: text/event-stream` the response is a live stream instead
-        (see `EventStream`), resumed with `Last-Event-ID`.
+        The intent's timeline, oldest first: status changes, the agent's
+        steps, and its checkout (see `Event`). `limit` and `cursor` page the
+        JSON list. With `Accept: text/event-stream` the response is a live
+        stream instead (see `EventStream`), resumed with `Last-Event-ID`.
       parameters:
         - $ref: "#/components/parameters/IntentId"
         - $ref: "#/components/parameters/Limit"
@@ -333,8 +330,8 @@ paths:
       operationId: listProfiles
       summary: List browser profiles
       description: |
-        **Preview, not yet available.** Your account's profile and your
-        customers' that exist so far, newest first.
+        Your account's profile and your customers' that exist so far, newest
+        first.
       parameters:
         - name: customer
           in: query
@@ -358,10 +355,10 @@ paths:
       operationId: createProfile
       summary: Create a browser profile
       description: |
-        **Preview, not yet available.** Makes the profile for your account,
-        or for `customer`, ahead of its first intent or session. An intent
-        makes the profile it needs by itself, so this is optional. Making one
-        that exists returns it unchanged, with `200`.
+        Makes the profile for your account, or for `customer`, ahead of its
+        first intent or session. An intent makes the profile it needs by
+        itself, so this is optional. Making one that exists returns it
+        unchanged, with `200`.
       requestBody:
         required: true
         description: Send `{}` for your account's own profile.
@@ -391,7 +388,6 @@ paths:
     get:
       operationId: getProfile
       summary: Retrieve a browser profile
-      description: "**Preview, not yet available.**"
       parameters:
         - $ref: "#/components/parameters/ProfileId"
       responses:
@@ -409,11 +405,10 @@ paths:
       operationId: deleteProfile
       summary: Forget a browser profile
       description: |
-        **Preview, not yet available.** Erases everything the profile kept:
-        logins, cookies, saved data. It shows `forgetting` until that is done,
-        also while an intent or a session still finishes with it, then
-        `forgotten`; the next one starts from an empty profile. Forgetting
-        twice is fine.
+        Erases everything the profile kept: logins, cookies, saved data. It
+        shows `forgetting` until that is done, also while an intent or a
+        session still finishes with it, then `forgotten`; the next one starts
+        from an empty profile. Forgetting twice is fine.
       parameters:
         - $ref: "#/components/parameters/ProfileId"
       responses:
@@ -433,11 +428,11 @@ paths:
       operationId: createSession
       summary: Open a browser session
       description: |
-        **Preview, not yet available.** Opens a browser on a profile, without
-        an intent: to sign in to a merchant once, so later intents find the
-        payer signed in, or to look at what the profile holds. Drive it with
-        commands, follow it with events, and release it when done; the
-        profile keeps what the session changed.
+        Opens a browser on a profile, without an intent: to sign in to a
+        merchant once, so later intents find the payer signed in, or to look
+        at what the profile holds. Drive it with commands, follow it with
+        events, and release it when done; the profile keeps what the session
+        changed.
 
         A profile is used by one intent or session at a time. If one is using
         it, or it is `forgetting`, this answers `409 conflict`
@@ -449,10 +444,17 @@ paths:
         A session never enters payment details (see `SessionCommand`). Test
         and live keys can both open one.
 
-        Preview limits, which may change: a session closes `max_minutes`
-        after it opens, or after 5 minutes without a command (screenshots and
-        event streams do not count), and an account can have 2 sessions open
-        at once (`session_limit`).
+        Sessions may not be open to every key yet. Until they are open to
+        yours, this answers `503` with `code: sessions_unavailable` and
+        creates nothing; a retry with the same `Idempotency-Key` opens the
+        session once they are. Sessions already open keep working.
+
+        Limits, which may change: a session closes `max_minutes` after it
+        opens, after 5 minutes with no command sent or run (`idle`;
+        screenshots and event streams do not count), or once its pages use
+        more data than a session may (`data_limit`). An account can have 2
+        sessions that have not ended (`queued`, `opening`, `open` or
+        `closing`) at once (`session_limit`).
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -475,6 +477,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorBody"
+        "503":
+          description: "`sessions_unavailable`: sessions are not open to this key yet. Nothing was created."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
         "4XX":
           $ref: "#/components/responses/Error"
         default:
@@ -482,7 +490,7 @@ paths:
     get:
       operationId: listSessions
       summary: List browser sessions
-      description: "**Preview, not yet available.** Newest first."
+      description: Newest first.
       parameters:
         - name: status
           in: query
@@ -515,7 +523,6 @@ paths:
     get:
       operationId: getSession
       summary: Retrieve a browser session
-      description: "**Preview, not yet available.**"
       parameters:
         - $ref: "#/components/parameters/SessionId"
       responses:
@@ -535,13 +542,19 @@ paths:
       operationId: runSessionCommand
       summary: Run a command in a session
       description: |
-        **Preview, not yet available.** Runs one command on the session's
-        current page and waits for it, up to 20 seconds. One that takes
-        longer answers `202` while still `pending`: fetch it again by its
-        `id`. Commands run one at a time, in the order sent; one sent while
-        another is `pending` waits its turn. A retry with the same
-        `Idempotency-Key` returns the same command instead of running it
-        again. The session must be `open` (`409 session_not_open`).
+        Runs one command on the session's current page and waits for it, up
+        to 20 seconds. One that takes longer answers `202` while still
+        `pending`: fetch it again by its `id`. Commands run one at a time, in
+        the order sent; one sent while another is `pending` waits its turn. A
+        retry with the same `Idempotency-Key` returns the same command instead
+        of running it again. The session must be `open`
+        (`409 session_not_open`).
+
+        A command that breaks the rules of its fields answers `400`: a `text`
+        with a control character other than a line break, or a `key` that is
+        not one key, alone or with only Shift or Control. One the page does
+        not allow comes back `refused` or `failed`, with the reason in
+        `error` (see `SessionCommand`, `ActCommand` and `Failure`).
       parameters:
         - $ref: "#/components/parameters/SessionId"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -579,7 +592,6 @@ paths:
     get:
       operationId: getSessionCommand
       summary: Retrieve a session command
-      description: "**Preview, not yet available.**"
       parameters:
         - $ref: "#/components/parameters/SessionId"
         - name: command_id
@@ -605,10 +617,11 @@ paths:
       operationId: getSessionScreenshot
       summary: See a session's page
       description: |
-        **Preview, not yet available.** A screenshot of the session's page,
-        taken now, as a JPEG whatever `Accept` says. It shows the payer's
-        signed-in pages, so it is never cached. The session must be `open`
-        (`409 session_not_open`).
+        A screenshot of the session's page, taken now, as a JPEG whatever
+        `Accept` says. It shows the payer's signed-in pages, so it is never
+        cached. The session must be `open` (`409 session_not_open`). At most
+        2 screenshots of a session may wait at once: one more answers `429`
+        with `code: too_many_commands`.
       parameters:
         - $ref: "#/components/parameters/SessionId"
       responses:
@@ -630,6 +643,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorBody"
+        "429":
+          description: "`too_many_commands`: 2 screenshots of this session already wait."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
         "4XX":
           $ref: "#/components/responses/Error"
         default:
@@ -640,10 +659,10 @@ paths:
       operationId: releaseSession
       summary: Release a session
       description: |
-        **Preview, not yet available.** Closes the browser and keeps what the
-        session changed in the profile: `closing`, then `closed`
-        (`released`). A session still `queued` or `opening` closes the same
-        way; one already `closed` or `failed` is returned unchanged.
+        Closes the browser and keeps what the session changed in the profile:
+        `closing`, then `closed` (`released`). A session still `queued` or
+        `opening` closes the same way; one already `closed` or `failed` is
+        returned unchanged.
       parameters:
         - $ref: "#/components/parameters/SessionId"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -664,11 +683,10 @@ paths:
       operationId: listSessionEvents
       summary: Follow a session
       description: |
-        **Preview, not yet available.** The session's timeline, oldest first:
-        status changes, pages and commands (see `Event`). `limit` and
-        `cursor` page the JSON list. With `Accept: text/event-stream` the
-        response is a live stream instead (see `EventStream`), resumed with
-        `Last-Event-ID`.
+        The session's timeline, oldest first: status changes, pages and
+        commands (see `Event`). `limit` and `cursor` page the JSON list. With
+        `Accept: text/event-stream` the response is a live stream instead
+        (see `EventStream`), resumed with `Last-Event-ID`.
       parameters:
         - $ref: "#/components/parameters/SessionId"
         - $ref: "#/components/parameters/Limit"
@@ -724,11 +742,11 @@ webhooks:
       operationId: sessionEvent
       summary: A browser session opened, closed or failed
       description: |
-        **Preview, not yet available.** Sent when a session opens, closes, or
-        fails (its browser was lost, say), with the same signature as
-        `intentEvent`. Only endpoints subscribed to `session.*` types receive
-        it: an endpoint that takes every type keeps getting intent events
-        only. Dispatch on `type` before reading `data`.
+        Sent when a session opens, closes, or fails (its browser was lost,
+        say), with the same signature as `intentEvent`. Only endpoints
+        subscribed to `session.*` types receive it: an endpoint that takes
+        every type keeps getting intent events only. Dispatch on `type`
+        before reading `data`.
       parameters:
         - name: OpenIntents-Signature
           in: header
@@ -1040,13 +1058,16 @@ components:
                 - profile_busy
                 - session_limit
                 - session_not_open
+                - sessions_unavailable
                 - url_not_allowed
+                - too_many_commands
+                - too_many_streams
             message:
               type: string
             param:
               type: string
             lease:
-              description: Preview. With `profile_busy`, what uses the profile and when its lease next runs out.
+              description: With `profile_busy`, what uses the profile and when its lease next runs out.
               $ref: "#/components/schemas/ProfileLease"
 
     WebhookEvent:
@@ -1194,9 +1215,8 @@ components:
     Event:
       type: object
       description: |
-        Preview. One step in an intent's or a session's timeline. `type` says
-        what `data` holds; new types may appear, so skip the ones you don't
-        know.
+        One step in an intent's or a session's timeline. `type` says what
+        `data` holds; new types may appear, so skip the ones you don't know.
         - `status`: `{status, reason?}`, the intent's or session's new status.
           `reason` says why, when there is a why: a failed intent's error
           code, the reason of the payment an intent requires, `paid` when a
@@ -1245,7 +1265,7 @@ components:
     EventStream:
       type: string
       description: |
-        Preview. Server-Sent Events: each event is `id: <event id>` and
+        Server-Sent Events: each event is `id: <event id>` and
         `data: <Event as JSON>`, then a blank line. Past events come first,
         then new ones as they happen, with a comment line (`:`) now and then
         to keep the connection open. Reconnect with `Last-Event-ID` to resume
@@ -1287,9 +1307,9 @@ components:
     Profile:
       type: object
       description: |
-        Preview. A payer's browser profile: the merchant logins, cookies and
-        carts their intents and sessions build up. Your account has one, and
-        so does each customer. It is reachable only with your account's keys.
+        A payer's browser profile: the merchant logins, cookies and carts
+        their intents and sessions build up. Your account has one, and so
+        does each customer. It is reachable only with your account's keys.
       required: [id, object, customer, status, lease, size_bytes, created_at, last_used_at]
       properties:
         id:
@@ -1368,11 +1388,11 @@ components:
           minimum: 1
           maximum: 15
           default: 15
-          description: Counted from when the session opens. Preview limit, which may change.
+          description: Counted from when the session opens. The limit may change.
 
     Session:
       type: object
-      description: Preview. A browser opened on a profile without an intent.
+      description: A browser opened on a profile without an intent.
       required: [id, object, profile, customer, status, test, created_at, expires_at]
       properties:
         id:
@@ -1414,11 +1434,13 @@ components:
         close_reason:
           type: [string, "null"]
           description: |
-            Why it ended: `released` by you, `idle` (no command for 5
-            minutes), `timed_out` (`max_minutes`), `browser_lost` (the browser
-            stopped: the session `failed`, and the profile keeps what was last
-            saved), or `error`. Others may appear.
-          examples: [released, idle, timed_out, browser_lost, error]
+            Why it ended: `released` by you, `idle` (5 minutes with no command
+            sent or run; screenshots and event streams do not count),
+            `timed_out` (`max_minutes`), `data_limit` (its pages used more
+            data than a session may), `browser_lost` (the browser stopped: the
+            session `failed`, and the profile keeps what was last saved), or
+            `error`. Others may appear.
+          examples: [released, idle, timed_out, data_limit, browser_lost, error]
 
     SessionList:
       type: object
@@ -1437,11 +1459,20 @@ components:
     SessionCommand:
       description: |
         One thing to do on the session's page. A session never enters payment
-        details: an `act` on a control recognized as placing an order or
-        paying, Enter on a payment form, or typing into a card field is
-        `refused` (`payment_not_allowed`). The text of a `type` action is kept
-        only until the command runs; results and events never return it
-        (events show `typed_chars`), though the page itself may show it.
+        details or places an order. These are `refused`, with
+        `payment_not_allowed`:
+        - an `act` on a control recognized as placing an order or paying
+          (also subscribing, donating, booking and the like), and on a
+          checkout page also on a bare "Continue", "Confirm", "Submit",
+          "Next" or similar;
+        - any action on a payment card field;
+        - typing what looks like a card number;
+        - Enter (pressed, or typed as a line break) at a checkout or where an
+          order control is shown.
+
+        The text of a `type` action is kept only until the command runs;
+        results and events never return it (events show `typed_chars`),
+        though the page itself may show it.
       oneOf:
         - $ref: "#/components/schemas/NavigateCommand"
         - $ref: "#/components/schemas/SnapshotCommand"
@@ -1473,7 +1504,9 @@ components:
     SnapshotCommand:
       type: object
       additionalProperties: false
-      description: The page's accessibility tree, with a `ref` on each element you can act on.
+      description: |
+        The page's accessibility tree, with a `ref` on each element you can
+        act on. It never includes what text fields hold.
       required: [type]
       properties:
         type:
@@ -1483,7 +1516,18 @@ components:
     ActCommand:
       type: object
       additionalProperties: false
-      description: Act on an element by its `ref` from the latest snapshot.
+      description: |
+        Act on an element by its `ref` from the latest snapshot.
+
+        After a `navigate`, and after any `act` except a `type` without line
+        breaks, the refs of the latest snapshot are forgotten: take a new
+        snapshot before the next `act`, which otherwise `failed` with
+        `not_found`. An `act` also fails `not_found` when the page changed
+        since the latest snapshot (it is on another URL).
+
+        `type` works only on text fields: typing into anything else `failed`
+        with `not_actionable`. Frames are not acted on: act on the elements
+        inside them, which have refs of their own.
       required: [type, ref, action]
       properties:
         type:
@@ -1497,13 +1541,18 @@ components:
           enum: [click, type, select, press]
         text:
           type: string
-          description: For `type`, the text to type.
+          description: |
+            For `type`, the text to type. It may contain line breaks but no
+            other control characters (a Tab, say): `400`.
         value:
           type: string
           description: For `select`, the option.
         key:
           type: string
-          description: For `press`, such as `Enter` or `Tab`.
+          description: |
+            For `press`, one key, alone or combined only with Shift or
+            Control, such as `Enter`, `Tab`, `Shift+Tab` or `Control+a`. More
+            than one key, or a combination with Alt or Meta, answers `400`.
       allOf:
         - if:
             properties:
@@ -1539,11 +1588,27 @@ components:
 
     Failure:
       type: object
+      description: Why a session command was `refused` or `failed`.
       required: [code, message]
       properties:
         code:
           type: string
-          examples: [payment_not_allowed, url_not_allowed, not_found]
+          description: |
+            `refused`: `payment_not_allowed` (see `SessionCommand`) or
+            `url_not_allowed` (see `NavigateCommand`). `failed`: `not_found`
+            and `not_actionable` (see `ActCommand`), `timed_out`,
+            `browser_error`, `browser_lost` (the browser stopped, and the
+            session `failed` with it), or `session_closed` (the session ended
+            before the command finished). Others may appear.
+          examples:
+            - payment_not_allowed
+            - url_not_allowed
+            - not_found
+            - not_actionable
+            - timed_out
+            - browser_error
+            - browser_lost
+            - session_closed
         message:
           type: string
 
@@ -1570,7 +1635,7 @@ components:
           type: [string, "null"]
         snapshot:
           type: [string, "null"]
-          description: For `snapshot`, the tree.
+          description: For `snapshot`, the tree. It never includes what text fields hold.
         text:
           type: [string, "null"]
           description: For `read`, the text.

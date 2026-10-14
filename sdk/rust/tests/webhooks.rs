@@ -1,4 +1,5 @@
 use openintents::webhooks::{sign_webhook, verify_webhook, verify_webhook_at};
+use openintents::{IntentStatus, SessionStatus, WebhookData};
 
 const BODY: &[u8] = br#"{"id":"evt_1","type":"intent.completed","created_at":"x","data":{"id":"int_1","status":"completed","intent":"x","created_at":"x"}}"#;
 const SECRET: &str = "whsec_test";
@@ -8,6 +9,21 @@ fn accepts_a_valid_signature() {
     let header = sign_webhook(BODY, SECRET, None);
     let event = verify_webhook(BODY, Some(&header), SECRET).unwrap();
     assert_eq!(event.kind, "intent.completed");
+    assert_eq!(event.intent().unwrap().status, IntentStatus::Completed);
+    assert!(event.session().is_none());
+}
+
+#[test]
+fn session_events_carry_a_session_and_unknown_types_parse() {
+    let body = br#"{"id":"evt_2","type":"session.closed","created_at":"x","data":{"id":"ses_1","object":"session","profile":"prf_1","status":"closed","close_reason":"idle","created_at":"x","expires_at":"y"}}"#;
+    let event = verify_webhook(body, Some(&sign_webhook(body, SECRET, None)), SECRET).unwrap();
+    let session = event.session().unwrap();
+    assert_eq!(session.status, SessionStatus::Closed);
+    assert_eq!(session.close_reason.as_deref(), Some("idle"));
+
+    let body = br#"{"id":"evt_3","type":"profile.forgotten","created_at":"x","data":{"id":"prf_1"}}"#;
+    let event = verify_webhook(body, Some(&sign_webhook(body, SECRET, None)), SECRET).unwrap();
+    assert!(matches!(event.data, WebhookData::Other(_)));
 }
 
 #[test]

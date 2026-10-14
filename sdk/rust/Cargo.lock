@@ -791,6 +791,7 @@ name = "openintents"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "futures-core",
  "hex",
  "hmac",
  "rand 0.8.8",

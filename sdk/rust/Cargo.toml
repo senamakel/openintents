@@ -17,6 +17,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+# For `EventStream`'s `Stream` impl; already a dependency of reqwest.
+futures-core = "0.3"
 tokio = { version = "1", features = ["time"] }
 uuid = { version = "1", features = ["v4"] }
 hmac = "0.12"

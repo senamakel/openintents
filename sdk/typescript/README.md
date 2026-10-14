@@ -40,8 +40,42 @@ Also: `oi.intents.get(id)`, `oi.intents.list({ status, customer, limit })`,
 `oi.balance.get({ customer })`, `oi.customers.create/get/update/list/listAll`
 and `oi.topups.create/get`. Pass `customer` to `intents.create` to buy for one
 of your customers. Errors throw `OpenIntentsError` (`status`, `type`, `code`,
-`param`). Every `create` and `cancel` sends an `Idempotency-Key`
+`param`, and `lease` with `profile_busy`). Every create (but a profile's),
+`cancel`, `release` and `runCommand` sends an `Idempotency-Key`
 automatically; 429s, 5xx and network errors are retried with backoff.
+
+### Live events
+
+Follow an intent as it runs. The stream resumes by itself after a dropped
+connection, and ends once the intent is over:
+
+```ts
+for await (const event of oi.intents.streamEvents(created.id)) {
+  console.log(event.type, event.data); // status, step, checkout
+}
+```
+
+`oi.intents.listEvents(id, { limit, cursor })` pages the same timeline.
+
+### Browser sessions
+
+A session opens a payer's browser profile without an intent: to sign them in
+to a shop once, so later intents find them signed in. A session never pays
+or places an order.
+
+```ts
+const session = await oi.sessions.create({ customer: "cus_4b81d0", start_url: "https://shop.example/login" });
+for await (const event of oi.sessions.streamEvents(session.id)) {
+  if (event.type === "status" && event.data.status === "open") break;
+}
+const page = await oi.sessions.runCommand(session.id, { type: "snapshot" }); // page.snapshot has the refs
+await oi.sessions.runCommand(session.id, { type: "act", ref: "e12", action: "type", text: "ada@example.com" });
+const jpeg = await oi.sessions.screenshot(session.id); // Uint8Array
+await oi.sessions.release(session.id); // the profile keeps the sign-in
+```
+
+Also `oi.sessions.list/listAll/get/getCommand/listEvents` and
+`oi.profiles.list/listAll/create/get/forget`.
 
 ### Webhooks
 
@@ -52,6 +86,9 @@ import { verifyWebhook } from "@tinyhumansai/openintents";
 const event = await verifyWebhook(rawBody, req.headers.get("OpenIntents-Signature"), process.env.WEBHOOK_SECRET!);
 if (event.type === "intent.requires_payment") notify(event.data.payment?.payment_url);
 ```
+
+Session events (`session.opened`, `session.closed`, `session.failed`) carry
+a session in `data`: check `event.type` first.
 
 ## CLI
 

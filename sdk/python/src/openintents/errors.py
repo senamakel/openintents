@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from .types import ProfileLease
+
 
 class OpenIntentsError(Exception):
-    """Any non-2xx response from the API, or a network failure (status 0)."""
+    """Any non-2xx response from the API, or a network failure (status 0).
+
+    `code` gives a finer reason, such as "profile_busy" or "session_not_open";
+    with "profile_busy", `lease` says what uses the profile and when its lease
+    next runs out.
+    """
 
     def __init__(
         self,
@@ -12,6 +19,7 @@ class OpenIntentsError(Exception):
         type: str,
         code: str | None = None,
         param: str | None = None,
+        lease: ProfileLease | None = None,
         request_id: str | None = None,
     ) -> None:
         super().__init__(message)
@@ -20,6 +28,7 @@ class OpenIntentsError(Exception):
         self.type = type
         self.code = code
         self.param = param
+        self.lease = lease
         self.request_id = request_id
 
     def __repr__(self) -> str:

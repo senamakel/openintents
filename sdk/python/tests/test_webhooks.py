@@ -32,6 +32,20 @@ def test_missing_and_malformed():
         verify_webhook(BODY, "v1=abc", SECRET)
 
 
+def test_session_events_carry_a_session():
+    body = json.dumps(
+        {
+            "id": "evt_2",
+            "type": "session.closed",
+            "created_at": "x",
+            "data": {"id": "ses_1", "object": "session", "status": "closed", "close_reason": "idle"},
+        }
+    ).encode()
+    event = verify_webhook(body, sign_webhook(body, SECRET), SECRET)
+    assert event["type"] == "session.closed"
+    assert event["data"]["close_reason"] == "idle"
+
+
 def test_shared_test_vector():
     # The TypeScript and Rust suites assert the same value.
     assert sign_webhook(b'{"id":"evt_1"}', "whsec_x", t=1_700_000_000) == (

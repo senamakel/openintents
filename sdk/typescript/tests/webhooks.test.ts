@@ -31,6 +31,19 @@ describe("webhooks", () => {
     await expect(verifyWebhook(body, null, secret)).rejects.toThrow(/Missing/);
   });
 
+  it("verifies session events, which carry a session", async () => {
+    const raw = JSON.stringify({
+      id: "evt_2",
+      type: "session.closed",
+      created_at: "x",
+      data: { id: "ses_1", object: "session", status: "closed", close_reason: "idle" },
+    });
+    const event = await verifyWebhook(raw, await signWebhook(raw, secret), secret);
+    if (event.type !== "session.closed") throw new Error(`unexpected ${event.type}`);
+    expect(event.data.status).toBe("closed");
+    expect(event.data.close_reason).toBe("idle");
+  });
+
   it("matches the shared test vector", async () => {
     // The Python and Rust suites assert the same value.
     expect(await signWebhook('{"id":"evt_1"}', "whsec_x", 1_700_000_000)).toBe(

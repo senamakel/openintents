@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
+import json
 import os
 import random
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
@@ -19,13 +22,26 @@ from .types import (
     Balance,
     Customer,
     CustomerList,
+    Event,
+    EventList,
     Intent,
     IntentList,
     IntentStatus,
+    Profile,
+    ProfileList,
+    Session,
+    SessionCommand,
+    SessionCommandResult,
+    SessionList,
+    SessionStatus,
     Topup,
 )
 
 DEFAULT_BASE_URL = "https://api.openintents.io/v1"
+
+#: A stream with no event and no keep-alive for this long (or the client
+#: timeout, if longer) is dropped and resumed.
+STREAM_IDLE_TIMEOUT = 60.0
 
 
 def _resolve(api_key: str | None, base_url: str | None) -> tuple[str, str]:
@@ -36,15 +52,27 @@ def _resolve(api_key: str | None, base_url: str | None) -> tuple[str, str]:
     return key, url
 
 
-def _headers(api_key: str, idempotency_key: str | None) -> dict[str, str]:
+def _headers(api_key: str, idempotency_key: str | None, accept: str = "application/json") -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Accept": "application/json",
+        "Accept": accept,
         "User-Agent": f"openintents-python/{__version__}",
     }
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
     return headers
+
+
+def _stream_headers(api_key: str, last_event_id: str | None) -> dict[str, str]:
+    headers = _headers(api_key, None, "text/event-stream")
+    if last_event_id is not None:
+        headers["Last-Event-ID"] = last_event_id
+    return headers
+
+
+def _stream_timeout(timeout: float) -> httpx.Timeout:
+    # The read timeout runs between chunks, so keep-alives hold a quiet stream open.
+    return httpx.Timeout(timeout, read=max(timeout, STREAM_IDLE_TIMEOUT))
 
 
 def _backoff(attempt: int, retry_after: str | None) -> float:
@@ -71,8 +99,76 @@ def _error(res: httpx.Response) -> OpenIntentsError:
         type=err.get("type") or ("api_error" if res.status_code >= 500 else "invalid_request"),
         code=err.get("code"),
         param=err.get("param"),
+        lease=err.get("lease"),
         request_id=res.headers.get("request-id"),
     )
+
+
+def _network_error(cause: object) -> OpenIntentsError:
+    return OpenIntentsError(f"Network error: {cause}", status=0, type="network")
+
+
+class _SseParser:
+    """Splits a Server-Sent Events stream into messages.
+
+    By the rules of the HTML standard: lines end in CRLF, LF or CR, comment
+    lines (":", the stream's keep-alives) and unknown fields are skipped, and a
+    blank line ends a message. Only messages that carry data are returned, each
+    as (the last id the stream had sent by then, data).
+    """
+
+    _EOL = re.compile(r"\r\n|\r|\n")
+
+    def __init__(self) -> None:
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._id: str | None = None
+        self._buffer = ""
+        self._data: list[str] = []
+
+    def feed(self, chunk: bytes | None) -> list[tuple[str | None, str]]:
+        """The messages a chunk of the body completes; None means the body ended."""
+        if chunk is None:
+            # A message without its closing blank line is dropped, as the standard says.
+            out = self._push(self._decoder.decode(b"", final=True))
+            rest, self._buffer = self._buffer, ""
+            if rest.endswith("\r"):
+                message = self._line(rest[:-1])
+                if message:
+                    out.append(message)
+            return out
+        return self._push(self._decoder.decode(chunk))
+
+    def _push(self, text: str) -> list[tuple[str | None, str]]:
+        self._buffer += text
+        out: list[tuple[str | None, str]] = []
+        start = 0
+        for m in self._EOL.finditer(self._buffer):
+            # A CR at the very end may be the first half of a CRLF cut in two.
+            if m.group() == "\r" and m.end() == len(self._buffer):
+                break
+            message = self._line(self._buffer[start : m.start()])
+            if message:
+                out.append(message)
+            start = m.end()
+        self._buffer = self._buffer[start:]
+        return out
+
+    def _line(self, line: str) -> tuple[str | None, str] | None:
+        if not line:
+            if not self._data:
+                return None
+            data, self._data = "\n".join(self._data), []
+            return self._id, data
+        if line.startswith(":"):
+            return None
+        field, _, value = line.partition(":")
+        if value.startswith(" "):
+            value = value[1:]
+        if field == "data":
+            self._data.append(value)
+        elif field == "id" and "\0" not in value:
+            self._id = value
+        return None
 
 
 def _create_body(
@@ -127,11 +223,14 @@ class OpenIntents:
     ) -> None:
         self._api_key, self._base_url = _resolve(api_key, base_url)
         self._max_retries = max_retries
+        self._timeout = timeout
         self._http = http_client or httpx.Client(timeout=timeout)
         self.intents = Intents(self)
         self.balance = BalanceResource(self)
         self.customers = Customers(self)
         self.topups = Topups(self)
+        self.profiles = Profiles(self)
+        self.sessions = Sessions(self)
 
     def close(self) -> None:
         self._http.close()
@@ -151,8 +250,20 @@ class OpenIntents:
         params: Mapping[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> Any:
+        return self._send(method, path, json=json, params=params, idempotency_key=idempotency_key).json()
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Any = None,
+        params: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        accept: str = "application/json",
+    ) -> httpx.Response:
         query = {k: v for k, v in (params or {}).items() if v is not None}
-        headers = _headers(self._api_key, idempotency_key)
+        headers = _headers(self._api_key, idempotency_key, accept)
         attempt = 0
         while True:
             try:
@@ -164,14 +275,67 @@ class OpenIntents:
                     time.sleep(_backoff(attempt, None))
                     attempt += 1
                     continue
-                raise OpenIntentsError(f"Network error: {exc}", status=0, type="network") from exc
+                raise _network_error(exc) from exc
             if res.is_success:
-                return res.json()
+                return res
             if _retryable(res.status_code) and attempt < self._max_retries:
                 time.sleep(_backoff(attempt, res.headers.get("retry-after")))
                 attempt += 1
                 continue
             raise _error(res)
+
+    def _stream(self, path: str, last_event_id: str | None) -> Iterator[Event]:
+        """Follow a timeline over Server-Sent Events: past events, then new ones.
+
+        A stream that closes or drops is resumed after the last event received
+        (Last-Event-ID) until the API answers 204: the timeline is over and
+        every event was sent.
+        """
+        last_id = last_event_id
+        failures = 0
+        while True:
+            retry_after: str | None = None
+            try:
+                with self._http.stream(
+                    "GET",
+                    self._base_url + path,
+                    headers=_stream_headers(self._api_key, last_id),
+                    timeout=_stream_timeout(self._timeout),
+                ) as res:
+                    if res.status_code == 204:
+                        return
+                    if not res.is_success:
+                        res.read()
+                        if not _retryable(res.status_code):
+                            raise _error(res)
+                        error = _error(res)
+                        retry_after = res.headers.get("retry-after")
+                    else:
+                        parser = _SseParser()
+                        sent_anything = False
+                        for chunk in res.iter_bytes():
+                            if chunk:
+                                # Anything arriving, a keep-alive too, shows the stream works.
+                                sent_anything, failures = True, 0
+                            for event_id, data in parser.feed(chunk):
+                                event = json.loads(data)
+                                last_id = event_id or event.get("id") or last_id
+                                yield event
+                        for event_id, data in parser.feed(None):
+                            event = json.loads(data)
+                            last_id = event_id or event.get("id") or last_id
+                            yield event
+                        if sent_anything:
+                            # The API closes a stream now and then: resume at once.
+                            continue
+                        # One that closes before sending a byte counts as a failure, so it cannot spin.
+                        error = _network_error("the event stream closed empty")
+            except httpx.TransportError as exc:
+                error = _network_error(exc)
+            if failures >= self._max_retries:
+                raise error
+            time.sleep(_backoff(failures, retry_after))
+            failures += 1
 
 
 class Intents:
@@ -230,6 +394,25 @@ class Intents:
         return self._c._request(
             "POST", f"/intents/{intent_id}/cancel", idempotency_key=idempotency_key or str(uuid.uuid4())
         )
+
+    def list_events(
+        self, intent_id: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> EventList:
+        """A page of the intent's timeline, oldest first: status changes, the agent's steps, its checkout."""
+        return self._c._request(
+            "GET", f"/intents/{intent_id}/events", params={"limit": limit, "cursor": cursor}
+        )
+
+    def stream_events(self, intent_id: str, *, last_event_id: str | None = None) -> Iterator[Event]:
+        """Follow the intent's timeline live: past events first, then new ones as they happen.
+
+        Resumes by itself after a dropped connection, and ends once the intent is
+        over and its last event was sent. Pass last_event_id to start after it.
+
+        >>> for event in oi.intents.stream_events(intent["id"]):
+        ...     print(event["type"], event["data"])
+        """
+        return self._c._stream(f"/intents/{intent_id}/events", last_event_id)
 
     def wait(
         self, intent_id: str, *, timeout: float = 300.0, interval: float = 2.0, return_on_payment: bool = True
@@ -333,6 +516,163 @@ class Topups:
         return self._c._request("GET", f"/topups/{topup_id}")
 
 
+class Profiles:
+    def __init__(self, client: OpenIntents) -> None:
+        self._c = client
+
+    def list(
+        self, *, customer: str | None = None, limit: int | None = None, cursor: str | None = None
+    ) -> ProfileList:
+        """Your account's profile and your customers' that exist so far, newest first."""
+        return self._c._request(
+            "GET", "/profiles", params={"customer": customer, "limit": limit, "cursor": cursor}
+        )
+
+    def list_all(self, *, customer: str | None = None, limit: int | None = None) -> Iterator[Profile]:
+        """Iterate every profile matching the filters, following next_cursor."""
+        cursor: str | None = None
+        while True:
+            page = self.list(customer=customer, limit=limit, cursor=cursor)
+            yield from page.get("data", [])
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return
+
+    def create(self, *, customer: str | None = None) -> Profile:
+        """Make the profile of your account, or of customer, ahead of its first intent or session.
+
+        Optional: an intent makes the profile it needs. Making one that exists
+        returns it unchanged, so no Idempotency-Key is needed.
+        """
+        return self._c._request("POST", "/profiles", json=_fields(customer=customer))
+
+    def get(self, profile_id: str) -> Profile:
+        return self._c._request("GET", f"/profiles/{profile_id}")
+
+    def forget(self, profile_id: str) -> Profile:
+        """Erase everything the profile kept: logins, cookies, saved data.
+
+        Returns it "forgetting", then it turns "forgotten". Forgetting twice is fine.
+        """
+        return self._c._request("DELETE", f"/profiles/{profile_id}")
+
+
+class Sessions:
+    def __init__(self, client: OpenIntents) -> None:
+        self._c = client
+
+    def create(
+        self,
+        *,
+        profile: str | None = None,
+        customer: str | None = None,
+        start_url: str | None = None,
+        max_minutes: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> Session:
+        """Open a browser on a profile without an intent: by profile or customer, else your account's.
+
+        A profile in use raises a 409 "profile_busy" whose lease says what holds it.
+        """
+        body = _fields(profile=profile, customer=customer, start_url=start_url, max_minutes=max_minutes)
+        return self._c._request(
+            "POST", "/sessions", json=body, idempotency_key=idempotency_key or str(uuid.uuid4())
+        )
+
+    def get(self, session_id: str) -> Session:
+        return self._c._request("GET", f"/sessions/{session_id}")
+
+    def list(
+        self,
+        *,
+        status: SessionStatus | None = None,
+        profile: str | None = None,
+        customer: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> SessionList:
+        """Newest first."""
+        return self._c._request(
+            "GET",
+            "/sessions",
+            params={
+                "status": status,
+                "profile": profile,
+                "customer": customer,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )
+
+    def list_all(
+        self,
+        *,
+        status: SessionStatus | None = None,
+        profile: str | None = None,
+        customer: str | None = None,
+        limit: int | None = None,
+    ) -> Iterator[Session]:
+        """Iterate every session matching the filters, following next_cursor."""
+        cursor: str | None = None
+        while True:
+            page = self.list(status=status, profile=profile, customer=customer, limit=limit, cursor=cursor)
+            yield from page.get("data", [])
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return
+
+    def release(self, session_id: str, *, idempotency_key: str | None = None) -> Session:
+        """Close the browser, keeping what the session changed in the profile.
+
+        A session that already ended is returned unchanged.
+        """
+        return self._c._request(
+            "POST", f"/sessions/{session_id}/release", idempotency_key=idempotency_key or str(uuid.uuid4())
+        )
+
+    def run_command(
+        self, session_id: str, command: SessionCommand, *, idempotency_key: str | None = None
+    ) -> SessionCommandResult:
+        """Run one command on the session's page.
+
+        It waits up to 20 seconds; a command still running then comes back
+        "pending", to follow with get_command. A refused or failed one says why
+        in "error".
+
+        >>> oi.sessions.run_command(session["id"], {"type": "snapshot"})
+        >>> oi.sessions.run_command(session["id"], {"type": "act", "ref": "e12", "action": "click"})
+        """
+        return self._c._request(
+            "POST",
+            f"/sessions/{session_id}/commands",
+            json=dict(command),
+            idempotency_key=idempotency_key or str(uuid.uuid4()),
+        )
+
+    def get_command(self, session_id: str, command_id: str) -> SessionCommandResult:
+        return self._c._request("GET", f"/sessions/{session_id}/commands/{command_id}")
+
+    def screenshot(self, session_id: str) -> bytes:
+        """A screenshot of the session's page, taken now: JPEG bytes."""
+        return self._c._send("GET", f"/sessions/{session_id}/screenshot", accept="image/jpeg").content
+
+    def list_events(
+        self, session_id: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> EventList:
+        """A page of the session's timeline, oldest first: status changes, pages and commands."""
+        return self._c._request(
+            "GET", f"/sessions/{session_id}/events", params={"limit": limit, "cursor": cursor}
+        )
+
+    def stream_events(self, session_id: str, *, last_event_id: str | None = None) -> Iterator[Event]:
+        """Follow the session's timeline live: past events first, then new ones as they happen.
+
+        Resumes by itself after a dropped connection, and ends once the session
+        is over and its last event was sent. Pass last_event_id to start after it.
+        """
+        return self._c._stream(f"/sessions/{session_id}/events", last_event_id)
+
+
 class AsyncOpenIntents:
     """Asynchronous client, same surface as OpenIntents with awaitable methods."""
 
@@ -347,11 +687,14 @@ class AsyncOpenIntents:
     ) -> None:
         self._api_key, self._base_url = _resolve(api_key, base_url)
         self._max_retries = max_retries
+        self._timeout = timeout
         self._http = http_client or httpx.AsyncClient(timeout=timeout)
         self.intents = AsyncIntents(self)
         self.balance = AsyncBalanceResource(self)
         self.customers = AsyncCustomers(self)
         self.topups = AsyncTopups(self)
+        self.profiles = AsyncProfiles(self)
+        self.sessions = AsyncSessions(self)
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -371,8 +714,21 @@ class AsyncOpenIntents:
         params: Mapping[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> Any:
+        res = await self._send(method, path, json=json, params=params, idempotency_key=idempotency_key)
+        return res.json()
+
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Any = None,
+        params: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        accept: str = "application/json",
+    ) -> httpx.Response:
         query = {k: v for k, v in (params or {}).items() if v is not None}
-        headers = _headers(self._api_key, idempotency_key)
+        headers = _headers(self._api_key, idempotency_key, accept)
         attempt = 0
         while True:
             try:
@@ -384,14 +740,59 @@ class AsyncOpenIntents:
                     await asyncio.sleep(_backoff(attempt, None))
                     attempt += 1
                     continue
-                raise OpenIntentsError(f"Network error: {exc}", status=0, type="network") from exc
+                raise _network_error(exc) from exc
             if res.is_success:
-                return res.json()
+                return res
             if _retryable(res.status_code) and attempt < self._max_retries:
                 await asyncio.sleep(_backoff(attempt, res.headers.get("retry-after")))
                 attempt += 1
                 continue
             raise _error(res)
+
+    async def _stream(self, path: str, last_event_id: str | None) -> AsyncIterator[Event]:
+        """The async twin of OpenIntents._stream."""
+        last_id = last_event_id
+        failures = 0
+        while True:
+            retry_after: str | None = None
+            try:
+                async with self._http.stream(
+                    "GET",
+                    self._base_url + path,
+                    headers=_stream_headers(self._api_key, last_id),
+                    timeout=_stream_timeout(self._timeout),
+                ) as res:
+                    if res.status_code == 204:
+                        return
+                    if not res.is_success:
+                        await res.aread()
+                        if not _retryable(res.status_code):
+                            raise _error(res)
+                        error = _error(res)
+                        retry_after = res.headers.get("retry-after")
+                    else:
+                        parser = _SseParser()
+                        sent_anything = False
+                        async for chunk in res.aiter_bytes():
+                            if chunk:
+                                sent_anything, failures = True, 0
+                            for event_id, data in parser.feed(chunk):
+                                event = json.loads(data)
+                                last_id = event_id or event.get("id") or last_id
+                                yield event
+                        for event_id, data in parser.feed(None):
+                            event = json.loads(data)
+                            last_id = event_id or event.get("id") or last_id
+                            yield event
+                        if sent_anything:
+                            continue
+                        error = _network_error("the event stream closed empty")
+            except httpx.TransportError as exc:
+                error = _network_error(exc)
+            if failures >= self._max_retries:
+                raise error
+            await asyncio.sleep(_backoff(failures, retry_after))
+            failures += 1
 
 
 class AsyncIntents:
@@ -448,6 +849,17 @@ class AsyncIntents:
         return await self._c._request(
             "POST", f"/intents/{intent_id}/cancel", idempotency_key=idempotency_key or str(uuid.uuid4())
         )
+
+    async def list_events(
+        self, intent_id: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> EventList:
+        return await self._c._request(
+            "GET", f"/intents/{intent_id}/events", params={"limit": limit, "cursor": cursor}
+        )
+
+    def stream_events(self, intent_id: str, *, last_event_id: str | None = None) -> AsyncIterator[Event]:
+        """Follow the intent's timeline live: `async for event in oi.intents.stream_events(id)`."""
+        return self._c._stream(f"/intents/{intent_id}/events", last_event_id)
 
     async def wait(
         self, intent_id: str, *, timeout: float = 300.0, interval: float = 2.0, return_on_payment: bool = True
@@ -542,3 +954,131 @@ class AsyncTopups:
 
     async def get(self, topup_id: str) -> Topup:
         return await self._c._request("GET", f"/topups/{topup_id}")
+
+
+class AsyncProfiles:
+    def __init__(self, client: AsyncOpenIntents) -> None:
+        self._c = client
+
+    async def list(
+        self, *, customer: str | None = None, limit: int | None = None, cursor: str | None = None
+    ) -> ProfileList:
+        return await self._c._request(
+            "GET", "/profiles", params={"customer": customer, "limit": limit, "cursor": cursor}
+        )
+
+    async def list_all(
+        self, *, customer: str | None = None, limit: int | None = None
+    ) -> AsyncIterator[Profile]:
+        cursor: str | None = None
+        while True:
+            page = await self.list(customer=customer, limit=limit, cursor=cursor)
+            for profile in page.get("data", []):
+                yield profile
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return
+
+    async def create(self, *, customer: str | None = None) -> Profile:
+        return await self._c._request("POST", "/profiles", json=_fields(customer=customer))
+
+    async def get(self, profile_id: str) -> Profile:
+        return await self._c._request("GET", f"/profiles/{profile_id}")
+
+    async def forget(self, profile_id: str) -> Profile:
+        return await self._c._request("DELETE", f"/profiles/{profile_id}")
+
+
+class AsyncSessions:
+    def __init__(self, client: AsyncOpenIntents) -> None:
+        self._c = client
+
+    async def create(
+        self,
+        *,
+        profile: str | None = None,
+        customer: str | None = None,
+        start_url: str | None = None,
+        max_minutes: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> Session:
+        body = _fields(profile=profile, customer=customer, start_url=start_url, max_minutes=max_minutes)
+        return await self._c._request(
+            "POST", "/sessions", json=body, idempotency_key=idempotency_key or str(uuid.uuid4())
+        )
+
+    async def get(self, session_id: str) -> Session:
+        return await self._c._request("GET", f"/sessions/{session_id}")
+
+    async def list(
+        self,
+        *,
+        status: SessionStatus | None = None,
+        profile: str | None = None,
+        customer: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> SessionList:
+        return await self._c._request(
+            "GET",
+            "/sessions",
+            params={
+                "status": status,
+                "profile": profile,
+                "customer": customer,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )
+
+    async def list_all(
+        self,
+        *,
+        status: SessionStatus | None = None,
+        profile: str | None = None,
+        customer: str | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[Session]:
+        cursor: str | None = None
+        while True:
+            page = await self.list(
+                status=status, profile=profile, customer=customer, limit=limit, cursor=cursor
+            )
+            for session in page.get("data", []):
+                yield session
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return
+
+    async def release(self, session_id: str, *, idempotency_key: str | None = None) -> Session:
+        return await self._c._request(
+            "POST", f"/sessions/{session_id}/release", idempotency_key=idempotency_key or str(uuid.uuid4())
+        )
+
+    async def run_command(
+        self, session_id: str, command: SessionCommand, *, idempotency_key: str | None = None
+    ) -> SessionCommandResult:
+        return await self._c._request(
+            "POST",
+            f"/sessions/{session_id}/commands",
+            json=dict(command),
+            idempotency_key=idempotency_key or str(uuid.uuid4()),
+        )
+
+    async def get_command(self, session_id: str, command_id: str) -> SessionCommandResult:
+        return await self._c._request("GET", f"/sessions/{session_id}/commands/{command_id}")
+
+    async def screenshot(self, session_id: str) -> bytes:
+        res = await self._c._send("GET", f"/sessions/{session_id}/screenshot", accept="image/jpeg")
+        return res.content
+
+    async def list_events(
+        self, session_id: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> EventList:
+        return await self._c._request(
+            "GET", f"/sessions/{session_id}/events", params={"limit": limit, "cursor": cursor}
+        )
+
+    def stream_events(self, session_id: str, *, last_event_id: str | None = None) -> AsyncIterator[Event]:
+        """Follow the session's timeline live: `async for event in oi.sessions.stream_events(id)`."""
+        return self._c._stream(f"/sessions/{session_id}/events", last_event_id)
