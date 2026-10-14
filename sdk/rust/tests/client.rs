@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use openintents::{
-    AnswerInput, Client, CreateIntent, CreateTopup, CustomerParams, Error, InputChannel, InputKind, IntentStatus,
-    ListCustomers, ListIntents, SignInHint, TopupStatus, WaitOptions,
+    AnswerInput, Client, CreateIntent, CreateTopup, CustomerParams, Error, InputChannel, InputKind, Intent,
+    IntentStatus, ListCustomers, ListIntents, SignInHint, TopupStatus, WaitOptions,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, header_exists, method, path, query_param};
@@ -212,6 +212,27 @@ async fn wait_returns_the_input_request() {
         (Some(InputChannel::Sms), Some(6), 2)
     );
     assert_eq!(request.prompt, "Enter the code blinkit.com just sent to your phone.");
+    // An older response without `options` still parses.
+    assert!(request.options.is_empty());
+}
+
+#[test]
+fn a_detail_with_options_parses_and_round_trips() {
+    let detail = json!({ "id": "inp_2", "kind": "detail", "shop": "flipkart.com",
+        "prompt": "Which size would you like?", "options": ["S", "M", "L"], "channel": null,
+        "length": null, "url": "https://openintents.io/input/inp_2", "expires_at": "x", "attempts_left": 2 });
+    let mut needs_input = intent("requires_input");
+    needs_input["input_request"] = detail.clone();
+    let it: Intent = serde_json::from_value(needs_input).unwrap();
+    let request = it.input_request.unwrap();
+    assert_eq!(request.kind, InputKind::Detail);
+    assert_eq!(request.options, ["S", "M", "L"]);
+    assert_eq!((request.channel, request.length), (None, None));
+    assert_eq!(serde_json::to_value(&request).unwrap(), detail);
+    assert_eq!(
+        serde_json::to_value(AnswerInput::value(&request.id, "M")).unwrap(),
+        json!({ "input": "inp_2", "value": "M" })
+    );
 }
 
 #[tokio::test]

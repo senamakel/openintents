@@ -46,7 +46,7 @@ enum Command {
     },
     /// Cancel an intent that hasn't paid.
     Cancel { id: String },
-    /// Answer what an intent asks the payer for while the agent signs them in.
+    /// Answer what an intent asks the payer for.
     Input {
         id: String,
         /// The ID of the intent's input request.
@@ -65,7 +65,7 @@ enum Command {
 #[derive(Args)]
 #[group(required = true, multiple = false)]
 struct Answer {
-    /// The phone number, email or code.
+    /// The phone number, email, code or a detail's answer.
     #[arg(long)]
     value: Option<String>,
     /// The payer would rather not.
@@ -107,6 +107,9 @@ fn show(intent: &Intent, json: bool) {
             "--value <answer>"
         };
         println!("  input needed at {}, ask the payer: {}", r.shop, r.prompt);
+        if !r.options.is_empty() {
+            println!("  options: {}", r.options.join(", "));
+        }
         println!(
             "  answer: openintents input {} --input {} {answer} (or --decline)",
             intent.id, r.id

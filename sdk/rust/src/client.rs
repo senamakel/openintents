@@ -58,8 +58,9 @@ pub struct WaitOptions {
     /// until it is final.
     pub return_on_sign_in: bool,
     /// Return when the intent waits for its payer to answer what the agent
-    /// asks while it signs them in (default true), so they can be asked
-    /// `input_request.prompt`. False keeps waiting until it is final.
+    /// asks, while it signs them in or for a detail the purchase needs
+    /// (default true), so they can be asked `input_request.prompt`. False
+    /// keeps waiting until it is final.
     pub return_on_input: bool,
 }
 

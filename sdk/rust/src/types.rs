@@ -190,6 +190,12 @@ pub enum InputKind {
     /// Their approval of the sign-in, in the shop's app or in a notification
     /// on another device. It has no value: answer with [`AnswerInput::done`].
     Approval,
+    /// Anything else the purchase needs that the request did not give, such
+    /// as the email the shop wants for the order, a size or a colour. The
+    /// `prompt` is then the agent's own question (never asking for passwords,
+    /// codes, PINs, card or bank details or ID numbers), and the answer goes
+    /// back to the agent.
+    Detail,
     #[serde(other)]
     Unknown,
 }
@@ -207,7 +213,8 @@ pub enum InputChannel {
 }
 
 /// What the agent needs from the payer while it signs them in to a shop
-/// itself. Ask them `prompt` and answer with
+/// itself, or a [`InputKind::Detail`] the purchase needs (at most 3 per
+/// intent). Ask them `prompt` and answer with
 /// [`Client::answer_intent_input`](crate::Client::answer_intent_input) right
 /// away: it expires after 5 minutes. Or send them `url` to type the answer
 /// there.
@@ -218,8 +225,13 @@ pub struct InputRequest {
     pub kind: InputKind,
     /// The shop's registrable domain, such as `blinkit.com`.
     pub shop: String,
-    /// What to ask the payer, written by OpenIntents. Show it to them as it is.
+    /// What to ask the payer, written by OpenIntents (for a detail, the
+    /// agent's own question). Show it to them as it is.
     pub prompt: String,
+    /// A detail's choices (at most 8), empty otherwise. When not empty,
+    /// answer with one of them (case-insensitive): anything else is a 400.
+    #[serde(default)]
+    pub options: Vec<String>,
     /// Where the shop sent the code, when known.
     #[serde(default)]
     pub channel: Option<InputChannel>,
@@ -248,11 +260,12 @@ pub struct InputRequest {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnswerInput {
-    /// The phone number, email or code.
+    /// The phone number, email or code, or a detail's answer (one of its
+    /// `options` when it has any).
     Value { input: String, value: String },
     /// The payer would rather not: the agent stops signing them in this way.
     Decline { input: String },
-    /// For an approval: the payer approved the sign-in.
+    /// Only for an approval: the payer approved the sign-in.
     Done { input: String },
 }
 
