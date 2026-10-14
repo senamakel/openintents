@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from typing import Any, Literal, TypedDict
 
-IntentStatus = Literal["queued", "running", "requires_payment", "completed", "failed", "cancelled"]
+IntentStatus = Literal[
+    "queued", "running", "requires_payment", "requires_login", "completed", "failed", "cancelled"
+]
 
 #: Statuses an intent never leaves.
 FINAL_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
@@ -21,6 +23,19 @@ class PaymentRequest(TypedDict, total=False):
     total: int
     fee: int
     currency: str
+    expires_at: str
+
+
+class SignInRequest(TypedDict, total=False):
+    """Where the payer signs in to a shop, so a waiting intent carries on.
+
+    Send url to the payer only: it works for 30 minutes, and whoever has it
+    can sign in for them.
+    """
+
+    url: str
+    #: The shop's domain, such as "amazon.com".
+    shop: str
     expires_at: str
 
 
@@ -56,6 +71,7 @@ class Intent(TypedDict, total=False):
     context: dict[str, Any] | None
     metadata: dict[str, str] | None
     payment: PaymentRequest | None
+    sign_in: SignInRequest | None
     result: Receipt | None
     error: IntentError | None
     test: bool
@@ -276,6 +292,7 @@ class SessionCommandResult(TypedDict, total=False):
 IntentWebhookEventType = Literal[
     "intent.running",
     "intent.requires_payment",
+    "intent.requires_login",
     "intent.completed",
     "intent.failed",
     "intent.cancelled",
