@@ -134,15 +134,17 @@ paths:
       summary: Answer what an intent asks its payer for
       description: |
         Answers the intent's `input_request` while it waits in
-        `requires_input`: the phone number, email or code in `value`,
-        `decline` when the payer would rather not (the agent stops signing
-        them in this way), or `done` once they approved an `approval`. Send
-        exactly one of the three, with the request's `id` as `input`. The
-        intent usually goes back to `running`.
+        `requires_input`: the phone number, email, code or answer to a
+        `detail` in `value`, `decline` when the payer would rather not (the
+        agent stops asking, see `InputRequest`), or `done` once they
+        approved an `approval`. Send exactly one of the three, with the
+        request's `id` as `input`. The intent usually goes back to `running`.
 
-        OpenIntents types the answer into the shop's page itself: the
-        agent's model never sees it. It is sealed until then and deleted once
-        typed, and no read, event, webhook or log returns it.
+        OpenIntents types a phone number, email or code into the shop's page
+        itself: the agent's model never sees it. It is sealed until then and
+        deleted once typed, and no read, event, webhook or log returns it. A
+        `detail` is no secret: its answer goes back to the agent, which uses
+        it as it would the request's own context.
       parameters:
         - $ref: "#/components/parameters/IntentId"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -162,7 +164,8 @@ paths:
         "400":
           description: |
             `invalid_request`: a `value` that does not fit the request's
-            `kind`, or not exactly one of `value`, `decline` and `done`.
+            `kind`, or is not one of a `detail`'s `options`, or not exactly
+            one of `value`, `decline` and `done`.
           content:
             application/json:
               schema:
@@ -918,7 +921,8 @@ components:
       description: |
         `requires_payment`, `requires_input` and `requires_login` wait on a
         person: the payer pays the payment link, answers what the agent asks
-        while it signs them in to the shop, or signs in on the sign-in link.
+        (while it signs them in to the shop, or for a detail the purchase
+        needs), or signs in on the sign-in link.
         `completed`, `failed` and `cancelled` are final.
       enum: [queued, running, requires_payment, requires_input, requires_login, completed, failed, cancelled]
 
@@ -961,7 +965,9 @@ components:
             `login_required`. With both on, the agent tries first and the
             sign-in link is the fallback. It takes effect only where
             OpenIntents has agent sign-in on for your key. Shops that need a
-            password always use the sign-in link.
+            password always use the sign-in link. Where it is on, the agent
+            may also ask the payer for a `detail` the purchase needs, in the
+            same way.
         sign_in_hint:
           type: object
           additionalProperties: false
@@ -1100,16 +1106,19 @@ components:
       type: object
       description: |
         What the agent needs from the payer while it signs them in to a shop
-        itself (see `sign_in_agent`). Ask the payer `prompt` and answer with
+        itself (see `sign_in_agent`), or a `detail` the purchase needs that
+        the request did not give. Ask the payer `prompt` and answer with
         `POST /intents/{id}/input` right away, or send them `url` so they
         type the answer there and it never passes through your chat. The
         agent never asks for a password this way.
 
+        A `detail` comes with the same `requires_input` status and
+        `intent.requires_input` webhook, and an intent asks at most 3.
         The request expires after 5 minutes. If it expires, or the payer
         declines, the agent stops asking: the intent then waits on a sign-in
         link (`requires_login`) if `sign_in_link` allows, or fails with
-        `login_required`.
-      required: [id, kind, shop, prompt, channel, length, url, expires_at, attempts_left]
+        `login_required`. For a `detail`, it fails with `needs_information`.
+      required: [id, kind, shop, prompt, options, channel, length, url, expires_at, attempts_left]
       properties:
         id:
           type: string
@@ -1123,16 +1132,35 @@ components:
             `approval` of the sign-in, in the shop's app or in a notification
             on another device. An `approval` has no value: answer `done` once
             they approved it.
-          enum: [phone, email, code, approval]
+
+            `detail`: anything else the purchase needs that the request did
+            not give, such as the email the shop wants for the order, a size
+            or a colour. `prompt` is then the agent's own question (never
+            asking for passwords, codes, PINs, card or bank details or ID
+            numbers), and the answer goes back to the agent.
+          enum: [phone, email, code, approval, detail]
         shop:
           type: string
           description: The shop's registrable domain, such as `blinkit.com`.
         prompt:
           type: string
           description: |
-            What to ask the payer, written by OpenIntents, never the page's
-            own words. Show it to them as it is.
+            What to ask the payer, written by OpenIntents (for a `detail`,
+            the agent's own question), never the page's own words. Show it
+            to them as it is.
           examples: ["Enter the code blinkit.com just sent to your phone."]
+        options:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            maxLength: 80
+          description: |
+            Always present: empty, except for a `detail` that offers choices
+            (at most 8, each at most 80 characters). When it is not empty,
+            answer with one of them (case-insensitive): anything else is
+            `400`.
+          examples: [["S", "M", "L"]]
         channel:
           type: [string, "null"]
           description: Where the shop sent the code, when known.
@@ -1173,10 +1201,12 @@ components:
         value:
           type: string
           description: |
-            The answer, for `phone`, `email` and `code`. A phone number is
-            digits, with an optional leading `+`; spaces, dashes, dots and
-            parentheses are fine. A code is 3 to 12 letters, digits or
-            dashes.
+            The answer, for `phone`, `email`, `code` and `detail`. A phone
+            number is digits, with an optional leading `+`; spaces, dashes,
+            dots and parentheses are fine. A code is 3 to 12 letters, digits
+            or dashes. A `detail`'s answer is a line of at most 300
+            characters or, depending on the question, an email address or a
+            phone number; with `options`, one of them (case-insensitive).
         decline:
           type: boolean
           const: true
@@ -1184,7 +1214,7 @@ components:
         done:
           type: boolean
           const: true
-          description: For an `approval`, the payer approved the sign-in.
+          description: Only for an `approval`, once the payer approved the sign-in.
 
     Receipt:
       type: object
@@ -1455,10 +1485,11 @@ components:
           waits for its payer to sign in shows
           `{status: requires_login, reason: login_required}`, then
           `{status: queued, reason: signed_in}`. While the agent signs the
-          payer in itself, the intent shows `{status: requires_input}` each
-          time it asks them for something (its `reason` the request's
-          `kind`), then `{status: running}` (its `reason` `answered`,
-          `declined`, `approved` or `expired`). Never the answer itself.
+          payer in itself, or asks them a detail, the intent shows
+          `{status: requires_input}` each time it asks them for something
+          (its `reason` the request's `kind`), then `{status: running}` (its
+          `reason` `answered`, `declined`, `approved` or `expired`). Never
+          the answer itself.
         - `step` (intents): `{action}`, what the agent did: `open`, `look`,
           `click`, `type`, `read`.
         - `checkout` (intents): `{merchant, total, currency}`, the payment
