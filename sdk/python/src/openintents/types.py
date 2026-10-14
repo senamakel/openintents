@@ -57,17 +57,23 @@ class SignInHint(TypedDict, total=False):
     email: str
 
 
-#: "phone" or "email" to sign in with, a one-time "code" the shop sent, or the
+#: "phone" or "email" to sign in with, a one-time "code" the shop sent, the
 #: payer's "approval" of the sign-in in the shop's app or on another device
-#: (it has no value: answer done=True).
-InputKind = Literal["phone", "email", "code", "approval"]
+#: (it has no value: answer done=True), or a "detail": anything else the
+#: purchase needs that the request did not give, such as the email the shop
+#: wants for the order, a size or a colour. A detail's prompt is the agent's
+#: own question (never asking for passwords, codes, PINs, card or bank details
+#: or ID numbers), and the answer goes back to the agent.
+InputKind = Literal["phone", "email", "code", "approval", "detail"]
 
 
 class InputRequest(TypedDict, total=False):
-    """What the agent needs from the payer while it signs them in to a shop itself.
+    """What the agent needs from the payer while it signs them in, or a detail.
 
-    Ask them prompt and answer with intents.input right away: it expires after
-    5 minutes. Or send them url to type the answer there.
+    Asked while it signs them in to a shop itself, or for a "detail" the
+    purchase needs (at most 3 per intent). Ask them prompt and answer with
+    intents.input right away: it expires after 5 minutes. Or send them url to
+    type the answer there.
     """
 
     #: Answer with this ID.
@@ -75,8 +81,12 @@ class InputRequest(TypedDict, total=False):
     kind: InputKind
     #: The shop's registrable domain, such as "blinkit.com".
     shop: str
-    #: What to ask the payer, written by OpenIntents. Show it to them as it is.
+    #: What to ask the payer, written by OpenIntents (for a "detail", the
+    #: agent's own question). Show it to them as it is.
     prompt: str
+    #: A "detail"'s choices (at most 8), empty otherwise. When not empty, answer
+    #: with one of them (case-insensitive): anything else is a 400.
+    options: list[str]
     #: Where the shop sent the code, when known.
     channel: Literal["sms", "email", "call", "app"] | None
     #: How many characters the code has, when the page says.

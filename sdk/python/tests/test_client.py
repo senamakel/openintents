@@ -136,6 +136,7 @@ INPUT_REQUEST = {
     "kind": "code",
     "shop": "blinkit.com",
     "prompt": "Enter the code blinkit.com just sent to your phone.",
+    "options": [],
     "channel": "sms",
     "length": 6,
     "url": "https://openintents.io/input/inp_1",
@@ -152,6 +153,32 @@ def test_wait_returns_at_requires_input_with_what_to_ask():
     got = oi.intents.wait("int_1", interval=0)
     assert got["status"] == "requires_input"
     assert got["input_request"] == INPUT_REQUEST
+
+
+def test_wait_returns_a_detail_with_its_options_answered_with_one():
+    detail = {
+        "id": "inp_2",
+        "kind": "detail",
+        "shop": "flipkart.com",
+        "prompt": "Which size would you like?",
+        "options": ["S", "M", "L"],
+        "channel": None,
+        "length": None,
+        "url": "https://openintents.io/input/inp_2",
+        "expires_at": "x",
+        "attempts_left": 2,
+    }
+    calls = []
+    oi = client(
+        (200, intent(status="requires_input", input_request=detail)),
+        (200, intent(status="running")),
+        calls=calls,
+    )
+    request = oi.intents.wait("int_1", interval=0)["input_request"]
+    assert request == detail
+    assert request["kind"] == "detail" and request["options"] == ["S", "M", "L"]
+    oi.intents.input("int_1", input=request["id"], value="M")
+    assert json.loads(calls[1].content) == {"input": "inp_2", "value": "M"}
 
 
 def test_wait_keeps_polling_past_an_input_request_when_asked():

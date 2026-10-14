@@ -445,9 +445,11 @@ class Intents:
     ) -> Intent:
         """Answer the intent's input_request while it waits in "requires_input".
 
-        Pass its id as input=, and one of value= (the phone number, email or
-        code), decline=True (the payer would rather not) or done=True (they
-        approved an "approval"). Returns the intent, usually "running" again.
+        Pass its id as input=, and one of value= (the phone number, email,
+        code, or a "detail"'s answer: one of its options when it has any),
+        decline=True (the payer would rather not) or done=True (only for an
+        "approval", once they approved it). Returns the intent, usually
+        "running" again.
         A request already answered or expired raises a 409 input_not_waiting.
 
         >>> request = intent["input_request"]
@@ -492,9 +494,9 @@ class Intents:
         """Poll until the intent is final, or (by default) waits on a person.
 
         On "requires_payment", hand intent["payment"]["payment_url"] to a person.
-        On "requires_input", ask the payer intent["input_request"]["prompt"] and
-        answer with input(). On "requires_login", send intent["sign_in"]["url"]
-        to the payer only.
+        On "requires_input", ask the payer intent["input_request"]["prompt"],
+        offering its options if it has any, and answer with input(). On
+        "requires_login", send intent["sign_in"]["url"] to the payer only.
         """
         deadline = time.monotonic() + timeout
         while True:
