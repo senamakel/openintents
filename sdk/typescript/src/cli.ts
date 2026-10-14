@@ -91,6 +91,7 @@ function describe(intent: Intent): string {
     const r = intent.input_request;
     const answer = r.kind === "approval" ? "--done" : "--value <answer>";
     lines.push(`  input needed at ${r.shop}, ask the payer: ${r.prompt}`);
+    if (r.options?.length) lines.push(`  options: ${r.options.join(", ")}`);
     lines.push(`  answer: openintents input ${intent.id} --input ${r.id} ${answer} (or --decline)`);
     lines.push(`  or the payer answers here (theirs only): ${r.url}`);
   }

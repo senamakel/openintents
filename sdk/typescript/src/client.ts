@@ -92,7 +92,8 @@ export interface WaitOptions {
   returnOnSignIn?: boolean;
   /**
    * Resolve when the intent waits for its payer to answer what the agent
-   * asks while it signs them in (default true), so the caller can ask them
+   * asks, while it signs them in or for a `detail` the purchase needs
+   * (default true), so the caller can ask them
    * `intent.input_request.prompt` and answer with `intents.input`. Set false
    * to keep waiting until it is final.
    */
@@ -405,8 +406,9 @@ class Intents {
 
   /**
    * Answer the intent's `input_request` while it waits in `requires_input`:
-   * the phone number, email or code in `value`, `decline: true` when the
-   * payer would rather not, or `done: true` once they approved an `approval`.
+   * the phone number, email, code or a `detail`'s answer (one of its
+   * `options`, when it has any) in `value`, `decline: true` when the payer
+   * would rather not, or `done: true` once they approved an `approval`.
    * Returns the intent, usually `running` again. A request already answered
    * or expired throws a 409 `input_not_waiting`.
    *

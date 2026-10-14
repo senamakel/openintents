@@ -66,6 +66,13 @@ Or send the payer `input_request.url` to type it there themselves. Pass
 question. Passwords are never asked this way: those shops send a sign-in
 link instead (`requires_login`, `sign_in.url`).
 
+The same status asks for anything else the purchase needs that the request
+did not give, such as the email the shop wants for the order or a size:
+`input_request.kind` is then `detail`, `prompt` is the agent's own question,
+and `options` lists the choices when there are any (answer with one of
+them). Answer it the same way, with `value`; the answer goes back to the
+agent. An intent asks at most 3 details, and never for a secret.
+
 ### Live events
 
 Follow an intent as it runs. The stream resumes by itself after a dropped

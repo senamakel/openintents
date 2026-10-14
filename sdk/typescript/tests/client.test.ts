@@ -141,6 +141,7 @@ describe("OpenIntents client", () => {
       kind: "code" as const,
       shop: "blinkit.com",
       prompt: "Enter the code blinkit.com just sent to your phone.",
+      options: [],
       channel: "sms" as const,
       length: 6,
       url: "https://openintents.io/input/inp_1",
@@ -154,6 +155,32 @@ describe("OpenIntents client", () => {
     const got = await make(fetch).intents.wait("int_1", { intervalMs: 1 });
     expect(got.status).toBe("requires_input");
     expect(got.input_request).toEqual(inputRequest);
+  });
+
+  it("wait returns a detail with its options, answered with one of them", async () => {
+    const detail = {
+      id: "inp_2",
+      kind: "detail" as const,
+      shop: "flipkart.com",
+      prompt: "Which size would you like?",
+      options: ["S", "M", "L"],
+      channel: null,
+      length: null,
+      url: "https://openintents.io/input/inp_2",
+      expires_at: "x",
+      attempts_left: 2,
+    };
+    const { fetch, calls } = mockFetch(
+      { body: intent({ status: "requires_input", input_request: detail }) },
+      { body: intent({ status: "running" }) },
+    );
+    const oi = make(fetch);
+    const got = await oi.intents.wait("int_1", { intervalMs: 1 });
+    expect(got.input_request).toEqual(detail);
+    expect(got.input_request?.kind).toBe("detail");
+    expect(got.input_request?.options).toEqual(["S", "M", "L"]);
+    await oi.intents.input("int_1", { input: got.input_request!.id, value: "M" });
+    expect(JSON.parse(calls[1]!.init.body as string)).toEqual({ input: "inp_2", value: "M" });
   });
 
   it("wait keeps polling past an input request when asked", async () => {

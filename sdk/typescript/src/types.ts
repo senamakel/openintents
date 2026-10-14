@@ -80,15 +80,21 @@ export interface SignInHint {
 
 /**
  * What an `InputRequest` needs: the payer's `phone` number or `email`, a
- * one-time `code` the shop sent them, or their `approval` of the sign-in in
- * the shop's app or on another device (it has no value: answer `done`).
+ * one-time `code` the shop sent them, their `approval` of the sign-in in the
+ * shop's app or on another device (it has no value: answer `done`), or a
+ * `detail`: anything else the purchase needs that the request did not give,
+ * such as the email the shop wants for the order, a size or a colour. A
+ * detail's `prompt` is the agent's own question (never asking for passwords,
+ * codes, PINs, card or bank details or ID numbers), and the answer goes back
+ * to the agent.
  */
-export type InputKind = "phone" | "email" | "code" | "approval";
+export type InputKind = "phone" | "email" | "code" | "approval" | "detail";
 
 /**
  * What the agent needs from the payer while it signs them in to a shop
- * itself. Ask them `prompt` and answer with `intents.input` right away: it
- * expires after 5 minutes. Or send them `url` to type the answer there.
+ * itself, or a `detail` the purchase needs. Ask them `prompt` and answer with
+ * `intents.input` right away: it expires after 5 minutes. Or send them `url`
+ * to type the answer there. An intent asks at most 3 details.
  */
 export interface InputRequest {
   /** Answer with this ID. */
@@ -96,8 +102,16 @@ export interface InputRequest {
   kind: InputKind;
   /** The shop's registrable domain, such as `blinkit.com`. */
   shop: string;
-  /** What to ask the payer, written by OpenIntents. Show it to them as it is. */
+  /**
+   * What to ask the payer, written by OpenIntents (for a `detail`, the
+   * agent's own question). Show it to them as it is.
+   */
   prompt: string;
+  /**
+   * A `detail`'s choices (at most 8), empty otherwise. When not empty, answer
+   * with one of them (case-insensitive): anything else is a 400.
+   */
+  options: string[];
   /** Where the shop sent the code, when known. */
   channel: "sms" | "email" | "call" | "app" | null;
   /** How many characters the code has, when the page says. */
@@ -111,8 +125,9 @@ export interface InputRequest {
 
 /**
  * An answer to an intent's `input_request`: its `id` as `input`, and one of
- * `value` (the phone number, email or code), `decline` (the payer would
- * rather not) or `done` (they approved an `approval`).
+ * `value` (the phone number, email or code, or a `detail`'s answer: a line of
+ * at most 300 characters, or one of its `options`), `decline` (the payer
+ * would rather not) or `done` (only for an `approval`, once they approved it).
  */
 export type AnswerInputParams =
   | { input: string; value: string }
