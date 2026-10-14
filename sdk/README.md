@@ -43,5 +43,10 @@ when the API answers `204` (the timeline is over).
 Errors carry the API's `status`, `type` (`kind` in Rust), `code`, `param` and,
 with `profile_busy`, the `lease` that says what holds the profile.
 
+`wait` returns when the intent is final, or waits on a person: payment
+(`requires_payment`, `returnOnPayment` / `return_on_payment`) or the payer's
+sign-in to the shop (`requires_login`, `returnOnSignIn` / `return_on_sign_in`).
+Both are on by default.
+
 Versions move together; `node sdk/bump-versions.mjs <patch|minor|major>` bumps
 all of them.
