@@ -14,6 +14,8 @@ pub enum IntentStatus {
     Queued,
     Running,
     RequiresPayment,
+    /// Waits for the payer to sign in to the shop on `sign_in.url`.
+    RequiresLogin,
     Completed,
     Failed,
     Cancelled,
@@ -32,6 +34,7 @@ impl IntentStatus {
             Self::Queued => "queued",
             Self::Running => "running",
             Self::RequiresPayment => "requires_payment",
+            Self::RequiresLogin => "requires_login",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
@@ -56,6 +59,11 @@ pub struct CreateIntent {
     /// Always return a payment link instead of paying from the balance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub require_payment_link: Option<bool>,
+    /// When the shop wants the payer signed in: wait in `requires_login` with
+    /// a sign-in link for them (`true`, the default), or fail with
+    /// `login_required` (`false`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign_in_link: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, String>>,
     /// A customer of your account to buy for: their balance and browser profile.
@@ -91,6 +99,11 @@ impl CreateIntent {
         self
     }
 
+    pub fn sign_in_link(mut self, yes: bool) -> Self {
+        self.sign_in_link = Some(yes);
+        self
+    }
+
     pub fn metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata
             .get_or_insert_with(HashMap::new)
@@ -102,6 +115,17 @@ impl CreateIntent {
         self.customer = Some(customer.into());
         self
     }
+}
+
+/// Where the payer signs in to a shop, so a waiting intent carries on. Send
+/// `url` to the payer only: it works for 30 minutes, and whoever has it can
+/// sign in for them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignInRequest {
+    pub url: String,
+    /// The shop's domain, such as `amazon.com`.
+    pub shop: String,
+    pub expires_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +186,9 @@ pub struct Intent {
     /// Set when `status` is `requires_payment`.
     #[serde(default)]
     pub payment: Option<PaymentRequest>,
+    /// Set when `status` is `requires_login`.
+    #[serde(default)]
+    pub sign_in: Option<SignInRequest>,
     /// Set when `status` is `completed`.
     #[serde(default)]
     pub result: Option<Receipt>,
