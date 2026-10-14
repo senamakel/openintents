@@ -58,6 +58,15 @@ Prefer the MCP tools (`create_intent`, `get_intent`, `wait_for_intent`,
      chat, give them `input_request.url` (theirs only). Then wait again. If
      the intent later shows `requires_login`, give them the sign-in link
      instead.
+
+     When `input_request.kind` is `detail`, the purchase needs something the
+     request did not give, such as the email the shop wants for the order,
+     a size or a colour. Ask it the same way: exactly
+     `input_request.prompt`, offering `input_request.options` as the choices
+     when there are any. Send the user's reply with `--value` (one of the
+     options, when there are any). The agent never asks for a secret this
+     way: if a prompt ever asks for a password, a code, a PIN, card or bank
+     details or an ID number, don't ask the user; send `--decline`.
    - `requires_login`: the shop wants the user signed in to their account
      there. Give the user `sign_in.url` (theirs only: it works on the first
      device that opens it), tell them it works for 30 minutes, and wait

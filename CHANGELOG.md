@@ -6,6 +6,18 @@ All three SDKs share one version. Format: [Keep a Changelog](https://keepachange
 
 ### Added
 
+- Details in `requires_input`: when the purchase needs something the
+  request did not give, such as the email the shop wants for the order, a
+  size or a colour, the agent asks the payer instead of failing.
+  `input_request.kind` is then `detail` and `prompt` is the agent's own
+  question (never about passwords, codes, PINs, card or bank details or ID
+  numbers). The new `input_request.options` lists a detail's choices
+  (empty otherwise), and an answer must then be one of them. A detail is
+  answered with `value` on the same endpoint, at most 3 per intent, and a
+  declined or expired one fails the intent with `needs_information`. All
+  three SDKs: the `detail` kind and `options`, and the CLIs print the
+  options.
+
 - Agent sign-in: when the shop wants the payer signed in and asks for a
   phone number or email and then a one-time code, the agent signs them in
   itself. Each time it needs something only the payer knows, the intent
