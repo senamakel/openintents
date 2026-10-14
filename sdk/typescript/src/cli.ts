@@ -28,6 +28,7 @@ const EXIT: Record<IntentStatus | "error", number> = {
   error: 1,
   requires_payment: 2,
   cancelled: 3,
+  requires_login: 4,
 };
 
 const HELP = `openintents ${VERSION}: the agentic API to buy anything
@@ -75,6 +76,10 @@ function describe(intent: Intent): string {
   if (intent.payment) {
     lines.push(`  payment needed: ${money(intent.payment.total, intent.payment.currency)} (+${money(intent.payment.fee, intent.payment.currency)} fee)`);
     lines.push(`  pay here: ${intent.payment.payment_url}`);
+  }
+  if (intent.sign_in) {
+    lines.push(`  sign-in needed at ${intent.sign_in.shop}: send this link to the payer only`);
+    lines.push(`  sign in here: ${intent.sign_in.url}`);
   }
   if (intent.result) {
     const r = intent.result;

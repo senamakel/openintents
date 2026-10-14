@@ -83,6 +83,12 @@ export interface WaitOptions {
    * until it is paid and final.
    */
   returnOnPayment?: boolean;
+  /**
+   * Resolve when the intent waits for its payer to sign in to the shop
+   * (default true), so the caller can hand `intent.sign_in.url` to them. Set
+   * false to keep waiting until they have and it is final.
+   */
+  returnOnSignIn?: boolean;
   signal?: AbortSignal;
 }
 
@@ -412,17 +418,21 @@ class Intents {
 
   /**
    * Poll until the intent is final (`completed`, `failed`, `cancelled`) or, by
-   * default, needs payment (`requires_payment`, with `payment.payment_url`).
+   * default, waits on a person: payment (`requires_payment`, with
+   * `payment.payment_url`) or the payer's sign-in (`requires_login`, with
+   * `sign_in.url`).
    */
   async wait(id: string, opts: WaitOptions = {}): Promise<Intent> {
     const timeoutMs = opts.timeoutMs ?? 300_000;
     const intervalMs = opts.intervalMs ?? 2_000;
     const returnOnPayment = opts.returnOnPayment ?? true;
+    const returnOnSignIn = opts.returnOnSignIn ?? true;
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const intent = await this.get(id, { signal: opts.signal });
       if (FINAL_STATUSES.includes(intent.status)) return intent;
       if (returnOnPayment && intent.status === "requires_payment") return intent;
+      if (returnOnSignIn && intent.status === "requires_login") return intent;
       if (Date.now() + intervalMs > deadline) throw new WaitTimeoutError(id, timeoutMs);
       await sleep(intervalMs, opts.signal);
     }

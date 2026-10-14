@@ -103,6 +103,38 @@ describe("OpenIntents client", () => {
     expect(got.status).toBe("completed");
   });
 
+  it("wait returns at requires_login by default, with the link to pass on", async () => {
+    const { fetch } = mockFetch(
+      { body: intent({ status: "running" }) },
+      {
+        body: intent({
+          status: "requires_login",
+          sign_in: { url: "https://openintents.io/signin/sgn_1", shop: "amazon.com", expires_at: "x" },
+        }),
+      },
+    );
+    const got = await make(fetch).intents.wait("int_1", { intervalMs: 1 });
+    expect(got.status).toBe("requires_login");
+    expect(got.sign_in?.url).toBe("https://openintents.io/signin/sgn_1");
+    expect(got.sign_in?.shop).toBe("amazon.com");
+  });
+
+  it("wait keeps polling past a sign-in when asked", async () => {
+    const { fetch } = mockFetch(
+      { body: intent({ status: "requires_login" }) },
+      { body: intent({ status: "queued" }) },
+      { body: intent({ status: "completed" }) },
+    );
+    const got = await make(fetch).intents.wait("int_1", { intervalMs: 1, returnOnSignIn: false });
+    expect(got.status).toBe("completed");
+  });
+
+  it("sends sign_in_link when creating an intent", async () => {
+    const { fetch, calls } = mockFetch({ status: 201, body: intent({ status: "queued" }) });
+    await make(fetch).intents.create({ intent: "a lamp", sign_in_link: false });
+    expect(JSON.parse(String(calls[0]!.init?.body))).toMatchObject({ intent: "a lamp", sign_in_link: false });
+  });
+
   it("wait times out", async () => {
     const { fetch } = mockFetch({ body: intent({ status: "running" }) });
     await expect(make(fetch).intents.wait("int_1", { intervalMs: 5, timeoutMs: 1 })).rejects.toBeInstanceOf(WaitTimeoutError);
