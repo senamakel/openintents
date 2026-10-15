@@ -18,11 +18,15 @@ transactions carry a 5% fee that is shown on every receipt.
 
 ## Connect
 
-Prefer the MCP tools (`create_intent`, `get_intent`, `wait_for_intent`,
-`list_intents`, `cancel_intent`, `get_balance`). If they aren't available:
+Prefer the MCP tools (`create_intent`, `wait_for_intent`, `get_intent`,
+`answer_input`, `list_intents`, `get_intent_events`, `cancel_intent`,
+`get_balance`, `create_topup`, `get_topup`). The server takes the user's API
+key (made at https://openintents.io/dashboard/api-keys), sent as
+`Authorization: Bearer <key>`. If the tools aren't available, with the key in
+`OPENINTENTS_API_KEY`:
 
-- Claude Code: `claude mcp add --transport http openintents https://api.openintents.io/mcp`
-- Codex: `codex mcp add openintents --url https://api.openintents.io/mcp`
+- Claude Code: `claude mcp add --transport http openintents https://api.openintents.io/mcp --header "Authorization: Bearer $OPENINTENTS_API_KEY"`
+- Codex: `codex mcp add openintents --url https://api.openintents.io/mcp --bearer-token-env-var OPENINTENTS_API_KEY`
 - Otherwise use the CLI: `npm install -g @tinyhumansai/openintents`, then
   `openintents login` (or set `OPENINTENTS_API_KEY`).
 
@@ -37,7 +41,10 @@ Prefer the MCP tools (`create_intent`, `get_intent`, `wait_for_intent`,
    If the user has given you their phone number or email for signing in to
    the shop, you may pass it as `sign_in_hint` (`{ "phone": ... }` or
    `{ "email": ... }`) so the agent need not ask for it.
-4. Create it and wait:
+4. Create it and wait. Over MCP: `create_intent` with an `idempotency_key`
+   of your choosing (send the same one if you retry, so it never buys twice),
+   then `wait_for_intent`, again while the intent is still queued or running
+   (each call waits up to 50 seconds). With the CLI:
 
    ```bash
    openintents run "flat white, oat milk, pickup 8:45 at the Blue Bottle on 5th" --max 10 --wait --json
@@ -54,8 +61,10 @@ Prefer the MCP tools (`create_intent`, `get_intent`, `wait_for_intent`,
      away, as the request expires in 5 minutes:
      `openintents input <id> --input <input_request.id> --value "<reply>"`,
      or `--done` once they approved an `approval`. If they would rather not,
-     send `--decline`. If they would rather type it on a page than in the
-     chat, give them `input_request.url` (theirs only). Then wait again. If
+     send `--decline`. Over MCP it is `answer_input` with the intent's `id`,
+     `input` (`input_request.id`) and one of `value`, `done` or `decline`.
+     If they would rather type it on a page than in the chat, give them
+     `input_request.url` (theirs only). Then wait again. If
      the intent later shows `requires_login`, give them the sign-in link
      instead.
 

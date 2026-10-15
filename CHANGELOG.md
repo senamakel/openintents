@@ -76,6 +76,11 @@ All three SDKs share one version. Format: [Keep a Changelog](https://keepachange
 
 ### Changed
 
+- MCP: the server takes an API key, sent as `Authorization: Bearer`. The
+  Claude Code plugin sends `OPENINTENTS_API_KEY`, and the skill and README
+  say how to connect other clients. The skill lists every MCP tool, with
+  `answer_input` for what an intent asks the user and an `idempotency_key`
+  on `create_intent` so a retry never buys twice.
 - TypeScript and Python: `WebhookEvent` is a union of intent and session
   events; check `type` before reading `data`.
 - Rust: `WebhookEvent.data` is a `WebhookData` (`Intent`, `Session` or
