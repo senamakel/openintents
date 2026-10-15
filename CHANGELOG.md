@@ -4,6 +4,8 @@ All three SDKs share one version. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+## [0.2.0]
+
 ### Added
 
 - Details in `requires_input`: when the purchase needs something the
