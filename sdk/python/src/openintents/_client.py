@@ -179,6 +179,7 @@ def _create_body(
     require_payment_link: bool | None,
     metadata: Mapping[str, str] | None,
     customer: str | None,
+    sign_in_link: bool | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"intent": intent}
     for k, v in (
@@ -188,6 +189,7 @@ def _create_body(
         ("require_payment_link", require_payment_link),
         ("metadata", dict(metadata) if metadata is not None else None),
         ("customer", customer),
+        ("sign_in_link", sign_in_link),
     ):
         if v is not None:
             body[k] = v
@@ -199,9 +201,13 @@ def _fields(**fields: Any) -> dict[str, Any]:
     return {k: (dict(v) if isinstance(v, Mapping) else v) for k, v in fields.items() if v is not None}
 
 
-def _settled(intent: Intent, return_on_payment: bool) -> bool:
+def _settled(intent: Intent, return_on_payment: bool, return_on_sign_in: bool) -> bool:
     status = intent.get("status")
-    return status in FINAL_STATUSES or (return_on_payment and status == "requires_payment")
+    return (
+        status in FINAL_STATUSES
+        or (return_on_payment and status == "requires_payment")
+        or (return_on_sign_in and status == "requires_login")
+    )
 
 
 class OpenIntents:
@@ -352,10 +358,13 @@ class Intents:
         require_payment_link: bool | None = None,
         metadata: Mapping[str, str] | None = None,
         customer: str | None = None,
+        sign_in_link: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Intent:
         """Start an intent. Returns immediately, usually with status "queued"."""
-        body = _create_body(intent, max_amount, currency, context, require_payment_link, metadata, customer)
+        body = _create_body(
+            intent, max_amount, currency, context, require_payment_link, metadata, customer, sign_in_link
+        )
         return self._c._request(
             "POST", "/intents", json=body, idempotency_key=idempotency_key or str(uuid.uuid4())
         )
@@ -415,16 +424,23 @@ class Intents:
         return self._c._stream(f"/intents/{intent_id}/events", last_event_id)
 
     def wait(
-        self, intent_id: str, *, timeout: float = 300.0, interval: float = 2.0, return_on_payment: bool = True
+        self,
+        intent_id: str,
+        *,
+        timeout: float = 300.0,
+        interval: float = 2.0,
+        return_on_payment: bool = True,
+        return_on_sign_in: bool = True,
     ) -> Intent:
-        """Poll until the intent is final, or (by default) needs payment.
+        """Poll until the intent is final, or (by default) waits on a person.
 
         On "requires_payment", hand intent["payment"]["payment_url"] to a person.
+        On "requires_login", send intent["sign_in"]["url"] to the payer only.
         """
         deadline = time.monotonic() + timeout
         while True:
             intent = self.get(intent_id)
-            if _settled(intent, return_on_payment):
+            if _settled(intent, return_on_payment, return_on_sign_in):
                 return intent
             if time.monotonic() + interval > deadline:
                 raise WaitTimeoutError(intent_id, timeout)
@@ -809,9 +825,12 @@ class AsyncIntents:
         require_payment_link: bool | None = None,
         metadata: Mapping[str, str] | None = None,
         customer: str | None = None,
+        sign_in_link: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Intent:
-        body = _create_body(intent, max_amount, currency, context, require_payment_link, metadata, customer)
+        body = _create_body(
+            intent, max_amount, currency, context, require_payment_link, metadata, customer, sign_in_link
+        )
         return await self._c._request(
             "POST", "/intents", json=body, idempotency_key=idempotency_key or str(uuid.uuid4())
         )
@@ -862,12 +881,18 @@ class AsyncIntents:
         return self._c._stream(f"/intents/{intent_id}/events", last_event_id)
 
     async def wait(
-        self, intent_id: str, *, timeout: float = 300.0, interval: float = 2.0, return_on_payment: bool = True
+        self,
+        intent_id: str,
+        *,
+        timeout: float = 300.0,
+        interval: float = 2.0,
+        return_on_payment: bool = True,
+        return_on_sign_in: bool = True,
     ) -> Intent:
         deadline = time.monotonic() + timeout
         while True:
             intent = await self.get(intent_id)
-            if _settled(intent, return_on_payment):
+            if _settled(intent, return_on_payment, return_on_sign_in):
                 return intent
             if time.monotonic() + interval > deadline:
                 raise WaitTimeoutError(intent_id, timeout)

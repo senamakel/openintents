@@ -56,6 +56,7 @@ fn exit_for(status: IntentStatus) -> u8 {
         IntentStatus::Failed | IntentStatus::Unknown => 1,
         IntentStatus::RequiresPayment => 2,
         IntentStatus::Cancelled => 3,
+        IntentStatus::RequiresLogin => 4,
         _ => 0,
     }
 }
@@ -68,6 +69,10 @@ fn show(intent: &Intent, json: bool) {
     println!("{}  {}  \"{}\"", intent.id, intent.status.as_str(), intent.intent);
     if let Some(p) = &intent.payment {
         println!("  pay here: {}", p.payment_url);
+    }
+    if let Some(s) = &intent.sign_in {
+        println!("  sign-in needed at {}: send this link to the payer only", s.shop);
+        println!("  sign in here: {}", s.url);
     }
     if let Some(r) = &intent.result {
         println!("  {}: {} {} (fee {})", r.merchant, r.total, r.currency, r.fee);

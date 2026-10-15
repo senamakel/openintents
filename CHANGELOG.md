@@ -6,6 +6,15 @@ All three SDKs share one version. Format: [Keep a Changelog](https://keepachange
 
 ### Added
 
+- Sign-in links: when the shop wants the payer signed in, an intent waits in
+  the new status `requires_login` with `sign_in: { url, shop, expires_at }`
+  for the payer, instead of failing; `intent.requires_login` webhooks, and
+  status reasons `login_required` and `signed_in`. `sign_in_link: false` on
+  create keeps the old behaviour (fail with `login_required`). All three
+  SDKs: the status, `sign_in`, `sign_in_link`, and `wait` returning at
+  `requires_login` by default (`returnOnSignIn` / `return_on_sign_in`). The
+  CLIs print the link and exit `4`.
+
 - Spec: browser profiles (`/profiles`), browser sessions (`/sessions`, with
   commands, screenshots and release, and a `sessionEvent` webhook), event
   streams for intents and sessions, and `lease` on the error body for

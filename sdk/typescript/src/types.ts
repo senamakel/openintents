@@ -4,6 +4,7 @@ export type IntentStatus =
   | "queued"
   | "running"
   | "requires_payment"
+  | "requires_login"
   | "completed"
   | "failed"
   | "cancelled";
@@ -22,6 +23,12 @@ export interface CreateIntentParams {
   context?: Record<string, unknown>;
   /** Always return a payment link instead of paying from the balance. */
   require_payment_link?: boolean;
+  /**
+   * When the shop wants the payer signed in: wait in `requires_login` with a
+   * sign-in link for them (`true`, the default), or fail with
+   * `login_required` (`false`).
+   */
+  sign_in_link?: boolean;
   /** Up to 20 of your own key/value pairs. */
   metadata?: Record<string, string>;
   /** A customer of your account to buy for: their balance and browser profile. */
@@ -35,6 +42,18 @@ export interface PaymentRequest {
   total: number;
   fee: number;
   currency: string;
+  expires_at: string;
+}
+
+/**
+ * Where the payer signs in to a shop, so a waiting intent carries on. Send
+ * `url` to the payer only: it works for 30 minutes, on the first device that
+ * opens it.
+ */
+export interface SignInRequest {
+  url: string;
+  /** The shop's domain, such as `amazon.com`. */
+  shop: string;
   expires_at: string;
 }
 
@@ -72,6 +91,8 @@ export interface Intent {
   metadata?: Record<string, string> | null;
   /** Set when `status` is `requires_payment`. */
   payment?: PaymentRequest | null;
+  /** Set when `status` is `requires_login`. */
+  sign_in?: SignInRequest | null;
   /** Set when `status` is `completed`. */
   result?: Receipt | null;
   /** Set when `status` is `failed`. */
@@ -376,6 +397,7 @@ export interface SessionCommandResult {
 export type IntentWebhookEventType =
   | "intent.running"
   | "intent.requires_payment"
+  | "intent.requires_login"
   | "intent.completed"
   | "intent.failed"
   | "intent.cancelled";

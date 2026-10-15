@@ -52,6 +52,10 @@ pub struct WaitOptions {
     /// Return when the intent needs payment (default true), so a person can
     /// be sent `payment.payment_url`. False keeps waiting until it is final.
     pub return_on_payment: bool,
+    /// Return when the intent waits for its payer to sign in to the shop
+    /// (default true), so they can be sent `sign_in.url`. False keeps waiting
+    /// until it is final.
+    pub return_on_sign_in: bool,
 }
 
 impl Default for WaitOptions {
@@ -60,6 +64,7 @@ impl Default for WaitOptions {
             timeout: Duration::from_secs(300),
             interval: Duration::from_secs(2),
             return_on_payment: true,
+            return_on_sign_in: true,
         }
     }
 }
@@ -329,12 +334,15 @@ impl Client {
         EventStream::new(self.clone(), format!("/sessions/{id}/events"), last_event_id)
     }
 
-    /// Poll until the intent is final, or (by default) needs payment.
+    /// Poll until the intent is final, or (by default) waits on a person: its
+    /// payment, or its payer's sign-in.
     pub async fn wait(&self, id: &str, opts: WaitOptions) -> Result<Intent> {
         let deadline = Instant::now() + opts.timeout;
         loop {
             let intent = self.get_intent(id).await?;
-            if intent.status.is_final() || (opts.return_on_payment && intent.status == IntentStatus::RequiresPayment) {
+            let waits_on_person = (opts.return_on_payment && intent.status == IntentStatus::RequiresPayment)
+                || (opts.return_on_sign_in && intent.status == IntentStatus::RequiresLogin);
+            if intent.status.is_final() || waits_on_person {
                 return Ok(intent);
             }
             if Instant::now() + opts.interval > deadline {

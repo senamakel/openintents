@@ -102,7 +102,7 @@ openintents balance
 ```
 
 Exit codes: `0` completed, `1` failed or error, `2` needs payment, `3`
-cancelled.
+cancelled, `4` needs the payer to sign in to the shop (`sign_in.url`).
 
 ## Development
 

@@ -107,6 +107,30 @@ def test_wait_past_payment_and_timeout():
         oi2.intents.wait("int_1", interval=0.01, timeout=0.001)
 
 
+def test_wait_returns_at_requires_login_with_the_link():
+    sign_in = {"url": "https://openintents.io/signin/sgn_1", "shop": "amazon.com", "expires_at": "x"}
+    oi = client((200, intent(status="running")), (200, intent(status="requires_login", sign_in=sign_in)))
+    got = oi.intents.wait("int_1", interval=0)
+    assert got["status"] == "requires_login"
+    assert got["sign_in"]["url"] == "https://openintents.io/signin/sgn_1"
+
+
+def test_create_sends_sign_in_link():
+    calls = []
+    oi = client((201, intent()), calls=calls)
+    oi.intents.create("a lamp", sign_in_link=False)
+    assert json.loads(calls[0].content) == {"intent": "a lamp", "sign_in_link": False}
+
+
+def test_wait_keeps_polling_past_a_sign_in_when_asked():
+    oi = client(
+        (200, intent(status="requires_login")),
+        (200, intent(status="queued")),
+        (200, intent(status="completed")),
+    )
+    assert oi.intents.wait("int_1", interval=0, return_on_sign_in=False)["status"] == "completed"
+
+
 def test_balance():
     oi = client((200, {"object": "balance", "available": 24450, "currency": "usd"}))
     assert oi.balance.get()["available"] == 24450
