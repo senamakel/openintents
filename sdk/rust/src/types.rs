@@ -14,6 +14,9 @@ pub enum IntentStatus {
     Queued,
     Running,
     RequiresPayment,
+    /// Waits for the payer to answer what the agent asks while it signs them
+    /// in to the shop (`input_request`).
+    RequiresInput,
     /// Waits for the payer to sign in to the shop on `sign_in.url`.
     RequiresLogin,
     Completed,
@@ -34,6 +37,7 @@ impl IntentStatus {
             Self::Queued => "queued",
             Self::Running => "running",
             Self::RequiresPayment => "requires_payment",
+            Self::RequiresInput => "requires_input",
             Self::RequiresLogin => "requires_login",
             Self::Completed => "completed",
             Self::Failed => "failed",
@@ -59,9 +63,20 @@ pub struct CreateIntent {
     /// Always return a payment link instead of paying from the balance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub require_payment_link: Option<bool>,
-    /// When the shop wants the payer signed in: wait in `requires_login` with
-    /// a sign-in link for them (`true`, the default), or fail with
-    /// `login_required` (`false`).
+    /// When the shop wants the payer signed in and asks for a phone number or
+    /// email and then a code: let the agent sign them in itself, asking for
+    /// each value in `requires_input` (`true`, the default), or never
+    /// (`false`). Takes effect only where OpenIntents has agent sign-in on
+    /// for your key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign_in_agent: Option<bool>,
+    /// The payer's phone number or email for signing in, so the agent need
+    /// not ask for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign_in_hint: Option<SignInHint>,
+    /// When the shop wants the payer signed in and the agent does not sign
+    /// them in itself: wait in `requires_login` with a sign-in link for them
+    /// (`true`, the default), or fail with `login_required` (`false`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sign_in_link: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,6 +114,16 @@ impl CreateIntent {
         self
     }
 
+    pub fn sign_in_agent(mut self, yes: bool) -> Self {
+        self.sign_in_agent = Some(yes);
+        self
+    }
+
+    pub fn sign_in_hint(mut self, hint: SignInHint) -> Self {
+        self.sign_in_hint = Some(hint);
+        self
+    }
+
     pub fn sign_in_link(mut self, yes: bool) -> Self {
         self.sign_in_link = Some(yes);
         self
@@ -126,6 +151,160 @@ pub struct SignInRequest {
     /// The shop's domain, such as `amazon.com`.
     pub shop: String,
     pub expires_at: String,
+}
+
+/// The payer's phone number or email for the agent to sign in with. Kept
+/// sealed, used once, deleted when the intent ends, and never returned.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct SignInHint {
+    /// Digits, with an optional leading `+`; spaces, dashes, dots and
+    /// parentheses are fine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+}
+
+impl SignInHint {
+    pub fn phone(mut self, phone: impl Into<String>) -> Self {
+        self.phone = Some(phone.into());
+        self
+    }
+
+    pub fn email(mut self, email: impl Into<String>) -> Self {
+        self.email = Some(email.into());
+        self
+    }
+}
+
+/// What an [`InputRequest`] needs from the payer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputKind {
+    /// Their phone number, to sign in with.
+    Phone,
+    /// Their email, to sign in with.
+    Email,
+    /// A one-time code the shop sent them.
+    Code,
+    /// Their approval of the sign-in, in the shop's app or in a notification
+    /// on another device. It has no value: answer with [`AnswerInput::done`].
+    Approval,
+    /// Anything else the purchase needs that the request did not give, such
+    /// as the email the shop wants for the order, a size or a colour. The
+    /// `prompt` is then the agent's own question (never asking for passwords,
+    /// codes, PINs, card or bank details or ID numbers), and the answer goes
+    /// back to the agent.
+    Detail,
+    #[serde(other)]
+    Unknown,
+}
+
+/// Where the shop sent a code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputChannel {
+    Sms,
+    Email,
+    Call,
+    App,
+    #[serde(other)]
+    Unknown,
+}
+
+/// What the agent needs from the payer while it signs them in to a shop
+/// itself, or a [`InputKind::Detail`] the purchase needs (at most 3 per
+/// intent). Ask them `prompt` and answer with
+/// [`Client::answer_intent_input`](crate::Client::answer_intent_input) right
+/// away: it expires after 5 minutes. Or send them `url` to type the answer
+/// there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputRequest {
+    /// Answer with this ID.
+    pub id: String,
+    pub kind: InputKind,
+    /// The shop's registrable domain, such as `blinkit.com`.
+    pub shop: String,
+    /// What to ask the payer, written by OpenIntents (for a detail, the
+    /// agent's own question). Show it to them as it is.
+    pub prompt: String,
+    /// A detail's choices (at most 8), empty otherwise. When not empty,
+    /// answer with one of them (case-insensitive): anything else is a 400.
+    #[serde(default)]
+    pub options: Vec<String>,
+    /// Where the shop sent the code, when known.
+    #[serde(default)]
+    pub channel: Option<InputChannel>,
+    /// How many characters the code has, when the page says.
+    #[serde(default)]
+    pub length: Option<u32>,
+    /// A page where the payer types the answer themselves. Theirs only:
+    /// whoever has it can answer.
+    pub url: String,
+    pub expires_at: String,
+    /// How many more times the agent may ask for this kind in this purchase,
+    /// after this one.
+    pub attempts_left: u32,
+}
+
+/// An answer to an intent's `input_request`, for
+/// [`Client::answer_intent_input`](crate::Client::answer_intent_input). Each
+/// names the request by its `id`.
+///
+/// ```
+/// use openintents::AnswerInput;
+///
+/// let code = AnswerInput::value("inp_8f2c41", "481516");
+/// let no = AnswerInput::decline("inp_8f2c41");
+/// # let _ = (code, no);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnswerInput {
+    /// The phone number, email or code, or a detail's answer (one of its
+    /// `options` when it has any).
+    Value { input: String, value: String },
+    /// The payer would rather not: the agent stops signing them in this way.
+    Decline { input: String },
+    /// Only for an approval: the payer approved the sign-in.
+    Done { input: String },
+}
+
+impl AnswerInput {
+    pub fn value(input: impl Into<String>, value: impl Into<String>) -> Self {
+        Self::Value {
+            input: input.into(),
+            value: value.into(),
+        }
+    }
+
+    pub fn decline(input: impl Into<String>) -> Self {
+        Self::Decline { input: input.into() }
+    }
+
+    pub fn done(input: impl Into<String>) -> Self {
+        Self::Done { input: input.into() }
+    }
+}
+
+impl Serialize for AnswerInput {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(2))?;
+        match self {
+            Self::Value { input, value } => {
+                map.serialize_entry("input", input)?;
+                map.serialize_entry("value", value)?;
+            }
+            Self::Decline { input } => {
+                map.serialize_entry("input", input)?;
+                map.serialize_entry("decline", &true)?;
+            }
+            Self::Done { input } => {
+                map.serialize_entry("input", input)?;
+                map.serialize_entry("done", &true)?;
+            }
+        }
+        map.end()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +368,9 @@ pub struct Intent {
     /// Set when `status` is `requires_login`.
     #[serde(default)]
     pub sign_in: Option<SignInRequest>,
+    /// Set when `status` is `requires_input`.
+    #[serde(default)]
+    pub input_request: Option<InputRequest>,
     /// Set when `status` is `completed`.
     #[serde(default)]
     pub result: Option<Receipt>,

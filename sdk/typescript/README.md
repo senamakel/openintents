@@ -37,12 +37,41 @@ if (intent.status === "requires_payment") {
 
 Also: `oi.intents.get(id)`, `oi.intents.list({ status, customer, limit })`,
 `for await (const i of oi.intents.listAll())`, `oi.intents.cancel(id)`,
+`oi.intents.input(id, { input, value })` (see below),
 `oi.balance.get({ customer })`, `oi.customers.create/get/update/list/listAll`
 and `oi.topups.create/get`. Pass `customer` to `intents.create` to buy for one
 of your customers. Errors throw `OpenIntentsError` (`status`, `type`, `code`,
 `param`, and `lease` with `profile_busy`). Every create (but a profile's),
-`cancel`, `release` and `runCommand` sends an `Idempotency-Key`
+`cancel`, `input`, `release` and `runCommand` sends an `Idempotency-Key`
 automatically; 429s, 5xx and network errors are retried with backoff.
+
+### Signing in to a shop
+
+When a shop wants the payer signed in and asks for a phone number or email
+and then a code, the agent signs them in itself. Each time it needs
+something only the payer knows, `wait` returns the intent in
+`requires_input`. Ask the payer `input_request.prompt` and answer within 5
+minutes; the agent's model never sees the answer:
+
+```ts
+if (intent.status === "requires_input" && intent.input_request) {
+  const answer = await askThePayer(intent.input_request.prompt); // your chat, say
+  await oi.intents.input(intent.id, { input: intent.input_request.id, value: answer });
+  // or { input, decline: true }, or { input, done: true } for an approval
+}
+```
+
+Or send the payer `input_request.url` to type it there themselves. Pass
+`sign_in_hint: { phone }` or `{ email }` to `create` to skip the first
+question. Passwords are never asked this way: those shops send a sign-in
+link instead (`requires_login`, `sign_in.url`).
+
+The same status asks for anything else the purchase needs that the request
+did not give, such as the email the shop wants for the order or a size:
+`input_request.kind` is then `detail`, `prompt` is the agent's own question,
+and `options` lists the choices when there are any (answer with one of
+them). Answer it the same way, with `value`; the answer goes back to the
+agent. An intent asks at most 3 details, and never for a secret.
 
 ### Live events
 
@@ -98,11 +127,13 @@ openintents login
 openintents run "UberX to SFO, leaving 7am" --max 60 --wait
 openintents status <id> --wait --json
 openintents pay <id>      # open the payment link
+openintents input <id> --input <input id> --value <code>
 openintents balance
 ```
 
 Exit codes: `0` completed, `1` failed or error, `2` needs payment, `3`
-cancelled, `4` needs the payer to sign in to the shop (`sign_in.url`).
+cancelled, `4` needs the payer to sign in to the shop (`sign_in.url`), `5`
+needs an answer from the payer (`input_request.prompt`).
 
 ## Development
 

@@ -9,7 +9,14 @@ from __future__ import annotations
 from typing import Any, Literal, TypedDict
 
 IntentStatus = Literal[
-    "queued", "running", "requires_payment", "requires_login", "completed", "failed", "cancelled"
+    "queued",
+    "running",
+    "requires_payment",
+    "requires_input",
+    "requires_login",
+    "completed",
+    "failed",
+    "cancelled",
 ]
 
 #: Statuses an intent never leaves.
@@ -37,6 +44,58 @@ class SignInRequest(TypedDict, total=False):
     #: The shop's domain, such as "amazon.com".
     shop: str
     expires_at: str
+
+
+class SignInHint(TypedDict, total=False):
+    """The payer's phone number or email for the agent to sign in with.
+
+    Kept sealed, used once, deleted when the intent ends, and never returned.
+    """
+
+    #: Digits, with an optional leading "+"; spaces, dashes, dots and parentheses are fine.
+    phone: str
+    email: str
+
+
+#: "phone" or "email" to sign in with, a one-time "code" the shop sent, the
+#: payer's "approval" of the sign-in in the shop's app or on another device
+#: (it has no value: answer done=True), or a "detail": anything else the
+#: purchase needs that the request did not give, such as the email the shop
+#: wants for the order, a size or a colour. A detail's prompt is the agent's
+#: own question (never asking for passwords, codes, PINs, card or bank details
+#: or ID numbers), and the answer goes back to the agent.
+InputKind = Literal["phone", "email", "code", "approval", "detail"]
+
+
+class InputRequest(TypedDict, total=False):
+    """What the agent needs from the payer while it signs them in, or a detail.
+
+    Asked while it signs them in to a shop itself, or for a "detail" the
+    purchase needs (at most 3 per intent). Ask them prompt and answer with
+    intents.input right away: it expires after 5 minutes. Or send them url to
+    type the answer there.
+    """
+
+    #: Answer with this ID.
+    id: str
+    kind: InputKind
+    #: The shop's registrable domain, such as "blinkit.com".
+    shop: str
+    #: What to ask the payer, written by OpenIntents (for a "detail", the
+    #: agent's own question). Show it to them as it is.
+    prompt: str
+    #: A "detail"'s choices (at most 8), empty otherwise. When not empty, answer
+    #: with one of them (case-insensitive): anything else is a 400.
+    options: list[str]
+    #: Where the shop sent the code, when known.
+    channel: Literal["sms", "email", "call", "app"] | None
+    #: How many characters the code has, when the page says.
+    length: int | None
+    #: A page where the payer types the answer themselves. Theirs only: whoever has it can answer.
+    url: str
+    expires_at: str
+    #: How many more times the agent may ask for this kind in this purchase, after this one.
+    attempts_left: int
 
 
 class ReceiptItem(TypedDict):
@@ -72,6 +131,7 @@ class Intent(TypedDict, total=False):
     metadata: dict[str, str] | None
     payment: PaymentRequest | None
     sign_in: SignInRequest | None
+    input_request: InputRequest | None
     result: Receipt | None
     error: IntentError | None
     test: bool
@@ -292,6 +352,7 @@ class SessionCommandResult(TypedDict, total=False):
 IntentWebhookEventType = Literal[
     "intent.running",
     "intent.requires_payment",
+    "intent.requires_input",
     "intent.requires_login",
     "intent.completed",
     "intent.failed",

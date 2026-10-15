@@ -34,6 +34,9 @@ Prefer the MCP tools (`create_intent`, `get_intent`, `wait_for_intent`,
 2. Agree a budget with the user and always pass it as `max_amount` (cents), or
    `--max <dollars>` on the CLI.
 3. Put structured details (addresses, names) in `context`, not the sentence.
+   If the user has given you their phone number or email for signing in to
+   the shop, you may pass it as `sign_in_hint` (`{ "phone": ... }` or
+   `{ "email": ... }`) so the agent need not ask for it.
 4. Create it and wait:
 
    ```bash
@@ -45,6 +48,25 @@ Prefer the MCP tools (`create_intent`, `get_intent`, `wait_for_intent`,
    - `requires_payment`: the balance can't cover it. Show the user what it is
      buying and give them `payment.payment_url`. Then wait again
      (`openintents status <id> --wait`).
+   - `requires_input`: the agent is signing the user in to the shop
+     (`input_request.shop`) and needs something only they know. Ask them
+     exactly `input_request.prompt`, naming the shop. Send their reply right
+     away, as the request expires in 5 minutes:
+     `openintents input <id> --input <input_request.id> --value "<reply>"`,
+     or `--done` once they approved an `approval`. If they would rather not,
+     send `--decline`. If they would rather type it on a page than in the
+     chat, give them `input_request.url` (theirs only). Then wait again. If
+     the intent later shows `requires_login`, give them the sign-in link
+     instead.
+
+     When `input_request.kind` is `detail`, the purchase needs something the
+     request did not give, such as the email the shop wants for the order,
+     a size or a colour. Ask it the same way: exactly
+     `input_request.prompt`, offering `input_request.options` as the choices
+     when there are any. Send the user's reply with `--value` (one of the
+     options, when there are any). The agent never asks for a secret this
+     way: if a prompt ever asks for a password, a code, a PIN, card or bank
+     details or an ID number, don't ask the user; send `--decline`.
    - `requires_login`: the shop wants the user signed in to their account
      there. Give the user `sign_in.url` (theirs only: it works on the first
      device that opens it), tell them it works for 30 minutes, and wait
@@ -52,13 +74,17 @@ Prefer the MCP tools (`create_intent`, `get_intent`, `wait_for_intent`,
    - `failed`: report `error.message`; ask before retrying.
 
 CLI exit codes: 0 completed, 1 failed or error, 2 needs payment, 3 cancelled,
-4 needs the user to sign in.
+4 needs the user to sign in, 5 needs an answer from the user.
 
 ## Rules
 
 - Only make purchases the user asked for, within the budget they gave.
 - Never pay a payment link yourself, and never ask for, store or invent card
-  numbers. Never open a sign-in link yourself or ask for the user's password. Payment happens on the hosted payment page or from the balance.
+  numbers. Payment happens on the hosted payment page or from the balance.
+- Never open a sign-in link or an `input_request.url` yourself. Never ask the
+  user for a password, a card PIN, a UPI PIN or a bank OTP: ask only what
+  `input_request.prompt` says, pass their reply on as it is, and don't
+  store or repeat it.
 - Use a test key (`oi_test_...`) when the user is only trying things out: test
   intents run end to end but never charge.
 - Cancel (`openintents cancel <id>`) anything the user changes their mind

@@ -128,6 +128,67 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /intents/{id}/input:
+    post:
+      operationId: answerIntentInput
+      summary: Answer what an intent asks its payer for
+      description: |
+        Answers the intent's `input_request` while it waits in
+        `requires_input`: the phone number, email, code or answer to a
+        `detail` in `value`, `decline` when the payer would rather not (the
+        agent stops asking, see `InputRequest`), or `done` once they
+        approved an `approval`. Send exactly one of the three, with the
+        request's `id` as `input`. The intent usually goes back to `running`.
+
+        OpenIntents types a phone number, email or code into the shop's page
+        itself: the agent's model never sees it. It is sealed until then and
+        deleted once typed, and no read, event, webhook or log returns it. A
+        `detail` is no secret: its answer goes back to the agent, which uses
+        it as it would the request's own context.
+      parameters:
+        - $ref: "#/components/parameters/IntentId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnswerInputParams"
+      responses:
+        "200":
+          description: The intent, usually `running` again.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Intent"
+        "400":
+          description: |
+            `invalid_request`: a `value` that does not fit the request's
+            `kind`, or is not one of a `detail`'s `options`, or not exactly
+            one of `value`, `decline` and `done`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: "`not_found`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: |
+            `input_not_waiting`: the request was already answered or
+            expired, or the intent moved on.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "4XX":
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+
   /intents/{id}/events:
     get:
       operationId: listIntentEvents
@@ -439,8 +500,9 @@ paths:
         (`profile_busy`), and the error's `lease` says what uses it and when
         its lease next runs out. A profile is free while its intent waits in
         `requires_payment`: a session opened then can change the cart that
-        intent resumes with. While an intent waits in `requires_login`, its
-        payer's sign-in may be using the profile.
+        intent resumes with. An intent that waits in `requires_input` still
+        uses its profile, and while one waits in `requires_login`, its
+        payer's sign-in may be using it.
 
         A session never enters payment details (see `SessionCommand`). Test
         and live keys can both open one.
@@ -857,10 +919,12 @@ components:
     IntentStatus:
       type: string
       description: |
-        `requires_payment` and `requires_login` wait on a person: the payer
-        pays the payment link, or signs in to the shop on the sign-in link.
+        `requires_payment`, `requires_input` and `requires_login` wait on a
+        person: the payer pays the payment link, answers what the agent asks
+        (while it signs them in to the shop, or for a detail the purchase
+        needs), or signs in on the sign-in link.
         `completed`, `failed` and `cancelled` are final.
-      enum: [queued, running, requires_payment, requires_login, completed, failed, cancelled]
+      enum: [queued, running, requires_payment, requires_input, requires_login, completed, failed, cancelled]
 
     CreateIntentParams:
       type: object
@@ -888,14 +952,44 @@ components:
         require_payment_link:
           type: boolean
           description: Always return a payment link instead of paying from the balance.
+        sign_in_agent:
+          type: boolean
+          default: true
+          description: |
+            When the shop wants the payer signed in, and its sign-in asks for
+            a phone number or an email and then a one-time code: `true` lets
+            the agent sign them in itself, waiting in `requires_input` each
+            time it needs something only the payer knows (see
+            `InputRequest`). `false` never does: the intent uses the sign-in
+            link instead, if `sign_in_link` allows, or fails with
+            `login_required`. With both on, the agent tries first and the
+            sign-in link is the fallback. It takes effect only where
+            OpenIntents has agent sign-in on for your key. Shops that need a
+            password always use the sign-in link. Where it is on, the agent
+            may also ask the payer for a `detail` the purchase needs, in the
+            same way.
+        sign_in_hint:
+          type: object
+          additionalProperties: false
+          description: |
+            The payer's phone number or email for signing in, so the agent
+            need not ask for it. It is kept sealed, used once, deleted when
+            the intent ends, and never returned.
+          properties:
+            phone:
+              type: string
+              description: Digits, with an optional leading `+`; spaces, dashes, dots and parentheses are fine.
+            email:
+              type: string
         sign_in_link:
           type: boolean
           default: true
           description: |
-            When the shop wants the payer signed in: `true` waits in
+            When the shop wants the payer signed in and the agent does not
+            sign them in itself (see `sign_in_agent`): `true` waits in
             `requires_login` with a sign-in link for them; `false` fails the
-            intent with `login_required` at once, for callers who sign payers
-            in themselves with sessions.
+            intent with `login_required`, for callers who sign payers in
+            themselves with sessions.
         customer:
           type: string
           description: |
@@ -939,6 +1033,11 @@ components:
           description: Set while `requires_login`.
           oneOf:
             - $ref: "#/components/schemas/SignInRequest"
+            - type: "null"
+        input_request:
+          description: Set while `requires_input`.
+          oneOf:
+            - $ref: "#/components/schemas/InputRequest"
             - type: "null"
         result:
           oneOf:
@@ -1002,6 +1101,120 @@ components:
         expires_at:
           type: string
           format: date-time
+
+    InputRequest:
+      type: object
+      description: |
+        What the agent needs from the payer while it signs them in to a shop
+        itself (see `sign_in_agent`), or a `detail` the purchase needs that
+        the request did not give. Ask the payer `prompt` and answer with
+        `POST /intents/{id}/input` right away, or send them `url` so they
+        type the answer there and it never passes through your chat. The
+        agent never asks for a password this way.
+
+        A `detail` comes with the same `requires_input` status and
+        `intent.requires_input` webhook, and an intent asks at most 3.
+        The request expires after 5 minutes. If it expires, or the payer
+        declines, the agent stops asking: the intent then waits on a sign-in
+        link (`requires_login`) if `sign_in_link` allows, or fails with
+        `login_required`. For a `detail`, it fails with `needs_information`.
+      required: [id, kind, shop, prompt, options, channel, length, url, expires_at, attempts_left]
+      properties:
+        id:
+          type: string
+          description: Answer with this ID.
+          examples: [inp_8f2c41d0a9e7b3f15c62d1aa]
+        kind:
+          type: string
+          description: |
+            What the agent needs: the payer's `phone` number or `email` to
+            sign in with, a one-time `code` the shop sent them, or their
+            `approval` of the sign-in, in the shop's app or in a notification
+            on another device. An `approval` has no value: answer `done` once
+            they approved it.
+
+            `detail`: anything else the purchase needs that the request did
+            not give, such as the email the shop wants for the order, a size
+            or a colour. `prompt` is then the agent's own question (never
+            asking for passwords, codes, PINs, card or bank details or ID
+            numbers), and the answer goes back to the agent.
+          enum: [phone, email, code, approval, detail]
+        shop:
+          type: string
+          description: The shop's registrable domain, such as `blinkit.com`.
+        prompt:
+          type: string
+          description: |
+            What to ask the payer, written by OpenIntents (for a `detail`,
+            the agent's own question), never the page's own words. Show it
+            to them as it is.
+          examples: ["Enter the code blinkit.com just sent to your phone."]
+        options:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            maxLength: 80
+          description: |
+            Always present: empty, except for a `detail` that offers choices
+            (at most 8, each at most 80 characters). When it is not empty,
+            answer with one of them (case-insensitive): anything else is
+            `400`.
+          examples: [["S", "M", "L"]]
+        channel:
+          type: [string, "null"]
+          description: Where the shop sent the code, when known.
+          enum: [sms, email, call, app, null]
+        length:
+          type: [integer, "null"]
+          description: How many characters the code has, when the page says.
+        url:
+          type: string
+          format: uri
+          description: |
+            A page where the payer types the answer themselves. Like a
+            sign-in link, it is theirs only: whoever has it can answer.
+        expires_at:
+          type: string
+          format: date-time
+          description: 5 minutes after the request was made.
+        attempts_left:
+          type: integer
+          minimum: 0
+          description: |
+            How many more times the agent may ask for this `kind` in this
+            purchase, after this one.
+
+    AnswerInputParams:
+      type: object
+      additionalProperties: false
+      description: |
+        `input`, and exactly one of `value`, `decline` and `done`.
+      required: [input]
+      minProperties: 2
+      maxProperties: 2
+      properties:
+        input:
+          type: string
+          description: The `id` of the intent's `input_request`.
+          examples: [inp_8f2c41d0a9e7b3f15c62d1aa]
+        value:
+          type: string
+          description: |
+            The answer, for `phone`, `email`, `code` and `detail`. A phone
+            number is digits, with an optional leading `+`; spaces, dashes,
+            dots and parentheses are fine. A code is 3 to 12 letters, digits
+            or dashes. A `detail`'s answer is a line of at most 300
+            characters or, depending on the question, an email address or a
+            phone number; with `options`, one of them (case-insensitive).
+        decline:
+          type: boolean
+          const: true
+          description: The payer would rather not. The agent stops signing them in this way.
+        done:
+          type: boolean
+          const: true
+          description: Only for an `approval`, once the payer approved the sign-in.
 
     Receipt:
       type: object
@@ -1104,6 +1317,7 @@ components:
                 - url_not_allowed
                 - too_many_commands
                 - too_many_streams
+                - input_not_waiting
             message:
               type: string
             param:
@@ -1127,6 +1341,7 @@ components:
           enum:
             - intent.running
             - intent.requires_payment
+            - intent.requires_input
             - intent.requires_login
             - intent.completed
             - intent.failed
@@ -1269,7 +1484,12 @@ components:
           a shop's check, `{status: queued, reason: retrying}`. An intent that
           waits for its payer to sign in shows
           `{status: requires_login, reason: login_required}`, then
-          `{status: queued, reason: signed_in}`.
+          `{status: queued, reason: signed_in}`. While the agent signs the
+          payer in itself, or asks them a detail, the intent shows
+          `{status: requires_input}` each time it asks them for something
+          (its `reason` the request's `kind`), then `{status: running}` (its
+          `reason` `answered`, `declined`, `approved` or `expired`). Never
+          the answer itself.
         - `step` (intents): `{action}`, what the agent did: `open`, `look`,
           `click`, `type`, `read`.
         - `checkout` (intents): `{merchant, total, currency}`, the payment

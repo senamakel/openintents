@@ -2,6 +2,7 @@ import { OpenIntentsError, WaitTimeoutError, type ApiErrorType } from "./errors.
 import { SseParser } from "./sse.js";
 import {
   FINAL_STATUSES,
+  type AnswerInputParams,
   type Balance,
   type BalanceParams,
   type CreateIntentParams,
@@ -50,8 +51,8 @@ export interface ClientOptions {
 export interface RequestOptions {
   /**
    * Sent as Idempotency-Key. Every `create` (but a profile's, which is
-   * idempotent by itself), `cancel`, `release` and `runCommand` generates one
-   * if omitted.
+   * idempotent by itself), `cancel`, `input`, `release` and `runCommand`
+   * generates one if omitted.
    */
   idempotencyKey?: string;
   signal?: AbortSignal;
@@ -89,6 +90,14 @@ export interface WaitOptions {
    * false to keep waiting until they have and it is final.
    */
   returnOnSignIn?: boolean;
+  /**
+   * Resolve when the intent waits for its payer to answer what the agent
+   * asks, while it signs them in or for a `detail` the purchase needs
+   * (default true), so the caller can ask them
+   * `intent.input_request.prompt` and answer with `intents.input`. Set false
+   * to keep waiting until it is final.
+   */
+  returnOnInput?: boolean;
   signal?: AbortSignal;
 }
 
@@ -395,6 +404,26 @@ class Intents {
     });
   }
 
+  /**
+   * Answer the intent's `input_request` while it waits in `requires_input`:
+   * the phone number, email, code or a `detail`'s answer (one of its
+   * `options`, when it has any) in `value`, `decline: true` when the payer
+   * would rather not, or `done: true` once they approved an `approval`.
+   * Returns the intent, usually `running` again. A request already answered
+   * or expired throws a 409 `input_not_waiting`.
+   *
+   * ```ts
+   * await oi.intents.input(intent.id, { input: intent.input_request!.id, value: "481516" });
+   * ```
+   */
+  input(id: string, params: AnswerInputParams, opts: RequestOptions = {}): Promise<Intent> {
+    return this.client.request<Intent>("POST", `/intents/${encodeURIComponent(id)}/input`, {
+      body: params,
+      ...opts,
+      idempotencyKey: opts.idempotencyKey ?? crypto.randomUUID(),
+    });
+  }
+
   /** A page of the intent's timeline, oldest first: status changes, the agent's steps, its checkout. */
   listEvents(id: string, params: ListEventsParams = {}, opts: RequestOptions = {}): Promise<EventList> {
     return this.client.request<EventList>("GET", `/intents/${encodeURIComponent(id)}/events`, {
@@ -419,7 +448,8 @@ class Intents {
   /**
    * Poll until the intent is final (`completed`, `failed`, `cancelled`) or, by
    * default, waits on a person: payment (`requires_payment`, with
-   * `payment.payment_url`) or the payer's sign-in (`requires_login`, with
+   * `payment.payment_url`), an answer from the payer (`requires_input`, with
+   * `input_request`) or the payer's sign-in (`requires_login`, with
    * `sign_in.url`).
    */
   async wait(id: string, opts: WaitOptions = {}): Promise<Intent> {
@@ -427,12 +457,14 @@ class Intents {
     const intervalMs = opts.intervalMs ?? 2_000;
     const returnOnPayment = opts.returnOnPayment ?? true;
     const returnOnSignIn = opts.returnOnSignIn ?? true;
+    const returnOnInput = opts.returnOnInput ?? true;
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const intent = await this.get(id, { signal: opts.signal });
       if (FINAL_STATUSES.includes(intent.status)) return intent;
       if (returnOnPayment && intent.status === "requires_payment") return intent;
       if (returnOnSignIn && intent.status === "requires_login") return intent;
+      if (returnOnInput && intent.status === "requires_input") return intent;
       if (Date.now() + intervalMs > deadline) throw new WaitTimeoutError(id, timeoutMs);
       await sleep(intervalMs, opts.signal);
     }

@@ -6,6 +6,34 @@ All three SDKs share one version. Format: [Keep a Changelog](https://keepachange
 
 ### Added
 
+- Details in `requires_input`: when the purchase needs something the
+  request did not give, such as the email the shop wants for the order, a
+  size or a colour, the agent asks the payer instead of failing.
+  `input_request.kind` is then `detail` and `prompt` is the agent's own
+  question (never about passwords, codes, PINs, card or bank details or ID
+  numbers). The new `input_request.options` lists a detail's choices
+  (empty otherwise), and an answer must then be one of them. A detail is
+  answered with `value` on the same endpoint, at most 3 per intent, and a
+  declined or expired one fails the intent with `needs_information`. All
+  three SDKs: the `detail` kind and `options`, and the CLIs print the
+  options.
+
+- Agent sign-in: when the shop wants the payer signed in and asks for a
+  phone number or email and then a one-time code, the agent signs them in
+  itself. Each time it needs something only the payer knows, the intent
+  waits in the new status `requires_input` with `input_request` (`id`,
+  `kind`, `shop`, `prompt`, `channel`, `length`, `url`, `expires_at`,
+  `attempts_left`), answered with `POST /intents/{id}/input` (`value`,
+  `decline` or `done`; `409 input_not_waiting` once it has moved on), and
+  `intent.requires_input` webhooks. `sign_in_agent: false` on create turns
+  it off, and `sign_in_hint` passes the payer's phone or email so the agent
+  need not ask. Passwords still go through the sign-in link, now the
+  fallback. All three SDKs: the status, `input_request`, `sign_in_agent`,
+  `sign_in_hint`, the answer (`intents.input` / `answer_intent_input`), and
+  `wait` returning at `requires_input` by default (`returnOnInput` /
+  `return_on_input`). The CLIs print the prompt and exit `5`, and
+  `openintents input` answers.
+
 - Sign-in links: when the shop wants the payer signed in, an intent waits in
   the new status `requires_login` with `sign_in: { url, shop, expires_at }`
   for the payer, instead of failing; `intent.requires_login` webhooks, and

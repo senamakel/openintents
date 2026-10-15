@@ -4,6 +4,7 @@ export type IntentStatus =
   | "queued"
   | "running"
   | "requires_payment"
+  | "requires_input"
   | "requires_login"
   | "completed"
   | "failed"
@@ -24,9 +25,22 @@ export interface CreateIntentParams {
   /** Always return a payment link instead of paying from the balance. */
   require_payment_link?: boolean;
   /**
-   * When the shop wants the payer signed in: wait in `requires_login` with a
-   * sign-in link for them (`true`, the default), or fail with
-   * `login_required` (`false`).
+   * When the shop wants the payer signed in and asks for a phone number or
+   * email and then a code: let the agent sign them in itself, asking for each
+   * value in `requires_input` (`true`, the default), or never (`false`). Takes
+   * effect only where OpenIntents has agent sign-in on for your key.
+   */
+  sign_in_agent?: boolean;
+  /**
+   * The payer's phone number or email for signing in, so the agent need not
+   * ask for it. Kept sealed, used once, deleted when the intent ends, and
+   * never returned.
+   */
+  sign_in_hint?: SignInHint;
+  /**
+   * When the shop wants the payer signed in and the agent does not sign them
+   * in itself: wait in `requires_login` with a sign-in link for them (`true`,
+   * the default), or fail with `login_required` (`false`).
    */
   sign_in_link?: boolean;
   /** Up to 20 of your own key/value pairs. */
@@ -56,6 +70,69 @@ export interface SignInRequest {
   shop: string;
   expires_at: string;
 }
+
+/** The payer's phone number or email for the agent to sign in with. */
+export interface SignInHint {
+  /** Digits, with an optional leading `+`; spaces, dashes, dots and parentheses are fine. */
+  phone?: string;
+  email?: string;
+}
+
+/**
+ * What an `InputRequest` needs: the payer's `phone` number or `email`, a
+ * one-time `code` the shop sent them, their `approval` of the sign-in in the
+ * shop's app or on another device (it has no value: answer `done`), or a
+ * `detail`: anything else the purchase needs that the request did not give,
+ * such as the email the shop wants for the order, a size or a colour. A
+ * detail's `prompt` is the agent's own question (never asking for passwords,
+ * codes, PINs, card or bank details or ID numbers), and the answer goes back
+ * to the agent.
+ */
+export type InputKind = "phone" | "email" | "code" | "approval" | "detail";
+
+/**
+ * What the agent needs from the payer while it signs them in to a shop
+ * itself, or a `detail` the purchase needs. Ask them `prompt` and answer with
+ * `intents.input` right away: it expires after 5 minutes. Or send them `url`
+ * to type the answer there. An intent asks at most 3 details.
+ */
+export interface InputRequest {
+  /** Answer with this ID. */
+  id: string;
+  kind: InputKind;
+  /** The shop's registrable domain, such as `blinkit.com`. */
+  shop: string;
+  /**
+   * What to ask the payer, written by OpenIntents (for a `detail`, the
+   * agent's own question). Show it to them as it is.
+   */
+  prompt: string;
+  /**
+   * A `detail`'s choices (at most 8), empty otherwise. When not empty, answer
+   * with one of them (case-insensitive): anything else is a 400.
+   */
+  options: string[];
+  /** Where the shop sent the code, when known. */
+  channel: "sms" | "email" | "call" | "app" | null;
+  /** How many characters the code has, when the page says. */
+  length: number | null;
+  /** A page where the payer types the answer themselves. Theirs only: whoever has it can answer. */
+  url: string;
+  expires_at: string;
+  /** How many more times the agent may ask for this `kind` in this purchase, after this one. */
+  attempts_left: number;
+}
+
+/**
+ * An answer to an intent's `input_request`: its `id` as `input`, and one of
+ * `value` (the phone number, email or code, or a `detail`'s answer: a line of
+ * at most 300 characters, or one of its `options`), `decline` (the payer
+ * would rather not) or `done` (only for an `approval`, once they approved it).
+ */
+export type AnswerInputParams =
+  | { input: string; value: string }
+  | { input: string; decline: true }
+  | { input: string; done: true };
 
 export interface ReceiptItem {
   name: string;
@@ -93,6 +170,8 @@ export interface Intent {
   payment?: PaymentRequest | null;
   /** Set when `status` is `requires_login`. */
   sign_in?: SignInRequest | null;
+  /** Set when `status` is `requires_input`. */
+  input_request?: InputRequest | null;
   /** Set when `status` is `completed`. */
   result?: Receipt | null;
   /** Set when `status` is `failed`. */
@@ -397,6 +476,7 @@ export interface SessionCommandResult {
 export type IntentWebhookEventType =
   | "intent.running"
   | "intent.requires_payment"
+  | "intent.requires_input"
   | "intent.requires_login"
   | "intent.completed"
   | "intent.failed"
