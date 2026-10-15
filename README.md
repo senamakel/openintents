@@ -25,7 +25,7 @@ Claude Code plugin.
 | Rust | `cargo add openintents` |
 | CLI | `npm install -g @tinyhumansai/openintents` |
 | Claude Code | `/plugin marketplace add tinyhumansai/openintents` |
-| Any MCP client | `https://api.openintents.io/mcp` |
+| Any MCP client | `https://api.openintents.io/mcp`, with your API key as `Authorization: Bearer` |
 | Any agent | "Read https://openintents.io/llms.txt and follow the instructions to set up OpenIntents." |
 
 ## Quickstart
