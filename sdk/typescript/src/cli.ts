@@ -12,6 +12,7 @@ import { parseArgs } from "node:util";
 
 import { OpenIntents } from "./client.js";
 import { OpenIntentsError, WaitTimeoutError } from "./errors.js";
+import { mcpUrl, runMcpBridge } from "./mcp.js";
 import type { AnswerInputParams, Intent, IntentStatus } from "./types.js";
 import { VERSION } from "./version.js";
 
@@ -45,6 +46,9 @@ Usage:
                                 answer what the intent asks the payer for
   openintents pay <id>          open the intent's payment link
   openintents balance
+  openintents mcp [--url <endpoint>]
+                                stdio MCP server for clients without HTTP MCP: relays
+                                to ${mcpUrl({})} with your key
   openintents login             save an API key to ${CONFIG_FILE}
 
 Every command takes --json for one JSON object per line.
@@ -60,12 +64,16 @@ async function savedKey(): Promise<string | undefined> {
   }
 }
 
-async function client(): Promise<OpenIntents> {
-  const apiKey = process.env.OPENINTENTS_API_KEY ?? (await savedKey());
-  if (!apiKey) {
+async function apiKey(): Promise<string> {
+  const key = process.env.OPENINTENTS_API_KEY ?? (await savedKey());
+  if (!key) {
     throw new Error("No API key. Run `openintents login` or set OPENINTENTS_API_KEY.");
   }
-  return new OpenIntents({ apiKey });
+  return key;
+}
+
+async function client(): Promise<OpenIntents> {
+  return new OpenIntents({ apiKey: await apiKey() });
 }
 
 function openUrl(url: string) {
@@ -119,6 +127,7 @@ async function main(argv: string[]): Promise<number> {
       "payment-link": { type: "boolean", default: false },
       status: { type: "string" },
       limit: { type: "string" },
+      url: { type: "string" },
       input: { type: "string" },
       value: { type: "string" },
       decline: { type: "boolean", default: false },
@@ -213,6 +222,11 @@ async function main(argv: string[]): Promise<number> {
         const spent = b.spent_this_month !== undefined ? `, ${money(b.spent_this_month, b.currency)} spent this month` : "";
         return `${money(b.available, b.currency)} available${spent}`;
       });
+      return 0;
+    }
+    case "mcp": {
+      // stdout belongs to the protocol: nothing else may be printed on it.
+      await runMcpBridge({ url: values.url ?? mcpUrl(), apiKey: await apiKey() });
       return 0;
     }
     case "login": {

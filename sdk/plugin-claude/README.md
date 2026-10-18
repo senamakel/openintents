@@ -20,4 +20,11 @@ claude mcp add --transport http openintents https://api.openintents.io/mcp \
   --header "Authorization: Bearer $OPENINTENTS_API_KEY"
 ```
 
+For a client that only speaks stdio, the CLI runs a local bridge to the same
+server (progress and questions for you included):
+
+```bash
+OPENINTENTS_API_KEY=oi_test_... npx -y @tinyhumansai/openintents mcp
+```
+
 See <https://openintents.io/docs/mcp>.
