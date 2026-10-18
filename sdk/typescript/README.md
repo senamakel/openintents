@@ -129,11 +129,40 @@ openintents status <id> --wait --json
 openintents pay <id>      # open the payment link
 openintents input <id> --input <input id> --value <code>
 openintents balance
+openintents mcp           # stdio MCP server, see below
 ```
 
 Exit codes: `0` completed, `1` failed or error, `2` needs payment, `3`
 cancelled, `4` needs the payer to sign in to the shop (`sign_in.url`), `5`
 needs an answer from the payer (`input_request.prompt`).
+
+### `openintents mcp`: MCP over stdio
+
+A local stdio MCP server for clients that cannot speak the hosted
+streamable-HTTP endpoint (`https://api.openintents.io/mcp`). It relays each
+JSON-RPC message to that endpoint with your key, and passes the answers back
+as they arrive, so progress notifications and elicitation requests reach the
+client while a call is still running. The client's reply to an elicitation is
+relayed back the same way.
+
+```json
+{
+  "mcpServers": {
+    "openintents": {
+      "command": "npx",
+      "args": ["-y", "@tinyhumansai/openintents", "mcp"],
+      "env": { "OPENINTENTS_API_KEY": "oi_test_..." }
+    }
+  }
+}
+```
+
+The key is `OPENINTENTS_API_KEY` or the one saved by `openintents login`. The
+endpoint defaults to the hosted one; `--url` or `OPENINTENTS_MCP_URL` points
+elsewhere, and `OPENINTENTS_BASE_URL` (the REST base, ending in `/v1`) moves
+it along. Stdout carries only the protocol; problems go to stderr.
+
+The same relay is available to programs as `runMcpBridge({ url, apiKey })`.
 
 ## Development
 
