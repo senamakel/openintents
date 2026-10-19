@@ -84,6 +84,49 @@ cargo install openintents --features cli
 openintents run "flat white, oat milk" --max 10 --wait
 ```
 
+## Country, waiting and forms
+
+`.country()` or `.end_user_ip()` on `CreateIntent`, `CreateSession`,
+`CreateSignIn` and `CreatePortalSession` picks the country the browser goes
+out from; the object says which in `country` and `country_source`.
+`create_intent_waiting(params, 30)` and `get_intent_waiting(id, 30)` have the
+API hold the request up to 50 seconds until the intent finishes or pauses.
+
+A question in `input_request` can offer `choices` (answer with one's `id`) or
+ask a form of `fields` (answer with `AnswerInput::values(id, [("name", "value")])`);
+`expects` says what a plain answer looks like. A `sensitive` question (an
+identity document) is answered only on `input_request.url`.
+
+## Secrets, sign-ins and live links
+
+```rust
+use openintents::{Client, CreateIntent, CreateSecret, CreateSignIn, SecretKind};
+
+async fn buy(oi: &Client) -> openintents::Result<()> {
+    let card = oi
+        .create_secret(CreateSecret::new(SecretKind::Card, "Work Visa", [("number", "4242424242424242")]).shops(["airfrance.com"]))
+        .await?;
+    oi.create_intent(CreateIntent::new("book the 7am flight").secrets([card.id]).shops(["airfrance.com"]))
+        .await?;
+    let sign_in = oi.create_sign_in(CreateSignIn::new("https://www.amazon.com/")).await?; // send sign_in.url
+    Ok(())
+}
+```
+
+Secrets are write-only (`list_secrets`, `get_secret`, `replace_secret`,
+`delete_secret`, `list_secret_uses`). Also `create_secret_request`,
+`create_portal_session` and `create_live_link`.
+
+## Webhook endpoints
+
+`create_webhook_endpoint` (its `secret` is shown there only),
+`list_webhook_endpoints`, `get_webhook_endpoint`, `update_webhook_endpoint`,
+`delete_webhook_endpoint`, `rotate_webhook_secret` (the old secret signs for
+24 more hours; `verify_webhook` accepts a header that carries both),
+`test_webhook_endpoint`, `list_webhook_deliveries` and `redeliver_webhook`.
+A 429 `Error::Api` carries `retry_after` and `rate_limit` (from the
+`RateLimit-*` headers).
+
 ## Development
 
 ```bash
