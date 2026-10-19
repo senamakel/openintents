@@ -5,7 +5,7 @@ license: GPL-3.0-or-later
 compatibility: Needs network access to api.openintents.io and an OpenIntents account. Uses the OpenIntents MCP server (https://api.openintents.io/mcp) or the `openintents` CLI from `@tinyhumansai/openintents` (npm).
 metadata:
   author: TinyHumans AI
-  version: "0.1.0"
+  version: "0.2.0"
   package: "@tinyhumansai/openintents"
 ---
 

@@ -170,13 +170,30 @@ openintents run "UberX to SFO, leaving 7am" --max 60 --wait
 openintents status <id> --wait --json
 openintents pay <id>      # open the payment link
 openintents input <id> --input <input id> --value <code>
-openintents balance
+openintents balance [--customer <id>]
+openintents customers create --external-id u-7 --name Ada --per-intent 50
+openintents customers portal <id>          # a link to the customer's own page
+openintents sessions open --customer <id> --start-url https://shop.example/
+openintents sessions command <id> snapshot # or navigate, read, click, type, select, press
+openintents sessions live <id>             # a 10 minute link to drive the browser
+openintents profiles list --customer <id>
+openintents topups create 25 --customer <id>
+openintents sign-ins create https://www.amazon.com/ --customer <id>
+echo '{"number":"4242424242424242"}' | openintents secrets set --kind card --label "Work Visa" --stdin
+openintents secrets list                   # handles and masks, never values
 openintents mcp           # stdio MCP server, see below
 ```
 
 Exit codes: `0` completed, `1` failed or error, `2` needs payment, `3`
 cancelled, `4` needs the payer to sign in to the shop (`sign_in.url`), `5`
 needs an answer from the payer (`input_request.prompt`).
+
+The same commands and flags exist in the Rust CLI (`cargo install openintents
+--features cli`), except `mcp`. `customers`, `sessions`, `profiles`, `topups`,
+`sign-ins` and `secrets` each take `--json` like the rest; `openintents --help`
+lists every flag. Stored secrets are write-only: no command prints a value,
+and `secrets set --stdin` takes the fields as a JSON object so they stay out
+of the process list and your shell history.
 
 ### `openintents mcp`: MCP over stdio
 

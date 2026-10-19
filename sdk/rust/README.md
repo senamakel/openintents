@@ -81,8 +81,28 @@ A CLI binary is included behind a feature:
 
 ```bash
 cargo install openintents --features cli
+openintents login
 openintents run "flat white, oat milk" --max 10 --wait
+openintents balance [--customer <id>]
+openintents customers create --external-id u-7 --name Ada --per-intent 50
+openintents customers portal <id>          # a link to the customer's own page
+openintents sessions open --customer <id> --start-url https://shop.example/
+openintents sessions command <id> snapshot # or navigate, read, click, type, select, press
+openintents sessions live <id>             # a 10 minute link to drive the browser
+openintents profiles list --customer <id>
+openintents topups create 25 --customer <id>
+openintents sign-ins create https://www.amazon.com/ --customer <id>
+echo '{"number":"4242424242424242"}' | openintents secrets set --kind card --label "Work Visa" --stdin
+openintents secrets list                   # handles and masks, never values
 ```
+
+`login` saves your key where the npm CLI does (`~/.config/openintents/config.json`)
+and later commands read it; `OPENINTENTS_API_KEY` wins when set. The commands
+and flags match the npm CLI's (`openintents --help`), except `mcp`, which only
+the npm CLI has. Stored secrets are write-only: no command prints a value, and
+`secrets set --stdin` takes the fields as a JSON object so they stay out of
+the process list. Exit codes: `0` completed, `1` failed or error, `2` needs
+payment, `3` cancelled, `4` needs the payer to sign in, `5` needs an answer.
 
 ## Country, waiting and forms
 
