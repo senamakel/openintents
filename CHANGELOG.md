@@ -2,10 +2,25 @@
 
 All three SDKs share one version. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.0]
 
 ### Added
 
+- CLI (npm and Rust, same commands and flags): `customers`
+  (`create`, `update`, `get`, `list`, `portal`), `sessions` (`open`, `list`,
+  `get`, `release`, `live`, `command`, `screenshot`), `profiles` (`list`,
+  `create`, `get`, `forget`), `topups` (`create`, `get`), `sign-ins`
+  (`create`, `get`) and `secrets` (`set`, `list`, `get`, `delete`,
+  `request`). Secrets are write-only: no command prints a value, and
+  `secrets set --stdin` takes the fields as JSON so they stay out of the
+  process list. `balance --customer`. The Rust CLI gains `login` (it saves
+  the key where the npm CLI does, and later commands read it), `run
+  --context` and `list --status`; only the npm CLI has `mcp`.
+- Versions: the three SDKs, the skill and the Claude plugin are all `0.2.0`
+  (the registries were at `0.1.0` and `0.1.1`). `sdk/bump-versions.mjs
+  --check` fails when any file disagrees, and the release workflow publishes
+  one version to npm, PyPI and crates.io and then checks that all three
+  report it.
 - Country: `country` (ISO 3166-1 alpha-2, lowercase) and `end_user_ip` on
   `POST /intents`, `/sessions`, `/sign_ins` and the portal session call pick
   the country a browser goes out from. Objects carry `country` and
@@ -51,10 +66,6 @@ All three SDKs share one version. Format: [Keep a Changelog](https://keepachange
 - MCP: sessions (`Mcp-Session-Id`) and Server-Sent Events progress, tasks on
   `2025-11-25`, elicitation of plain questions, and OAuth sign-in for clients
   that support it.
-
-## [0.2.0]
-
-### Added
 
 - Details in `requires_input`: when the purchase needs something the
   request did not give, such as the email the shop wants for the order, a
