@@ -4,6 +4,54 @@ All three SDKs share one version. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Added
+
+- Country: `country` (ISO 3166-1 alpha-2, lowercase) and `end_user_ip` on
+  `POST /intents`, `/sessions`, `/sign_ins` and the portal session call pick
+  the country a browser goes out from. Objects carry `country` and
+  `country_source` (`explicit`, `payer`, `end_user_ip`, `request_ip` or
+  `default`). `422 country_unavailable` when no browser can go out from the
+  country asked for. All three SDKs.
+- Waiting: `Prefer: wait=N` on `POST /intents` and `GET /intents/{id}` holds
+  the request up to 50 seconds until the intent finishes or pauses; the
+  answer says `Preference-Applied`. TypeScript `{ wait }`, Python `wait=`,
+  Rust `create_intent_waiting` and `get_intent_waiting`. The MCP tools
+  `create_intent` and `answer_input` take `wait_seconds`.
+- Structured questions: an `input_request` can offer `choices` (an `id`,
+  `label`, `description` and `price_delta` each) or ask a form of `fields`
+  (`text`, `email`, `phone`, `date`, `number` or `choice`), and says what a
+  plain answer looks like in `expects`. Answer a form with `values`, a choice
+  with its `id` as `value`. `input_ttl_seconds` on create sets how long a
+  question may wait.
+- Sensitive questions: `input_request.kind` is `sensitive` for an identity
+  document, answered only on `input_request.url` (`422 answer_on_page`).
+- Secrets: `POST/GET /secrets`, `GET/PUT/DELETE /secrets/{id}` and
+  `GET /secrets/{id}/uses` store details a purchase may need without putting
+  them in a prompt; they are write-only. `secrets` and `shops` on
+  `POST /intents` name the ones a purchase may use. `POST
+  /customers/{id}/secret_requests` and `GET /secret_requests/{id}` ask a
+  customer to enter their own, and `secret_request.completed` ends one.
+  The MCP tools `create_secret`, `list_secrets` and `delete_secret`.
+- Sign-in links without an intent: `POST /sign_ins` and `GET /sign_ins/{id}`,
+  ending in `sign_in.completed` or `sign_in.expired`.
+- Live links: `POST /sessions/{id}/live_links` makes a 10 minute link to drive
+  an open session, never to pay.
+- Portal sessions: `POST /customers/{id}/portal_sessions` (`return_url`,
+  `ttl_seconds`) makes a link to a customer's own page.
+- Webhook endpoints: `/webhook_endpoints` (create, list, get, update, delete),
+  `rotate_secret` (the old secret signs for 24 more hours; `verifyWebhook`
+  and its twins accept a header with both), `test`, `deliveries` and
+  `redeliver`; and `webhook_url` (with a `webhook_secret` in the create
+  response) on `POST /intents` and `/sessions`.
+- Limits: `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` on
+  responses and `429 rate_limit_exceeded` with `Retry-After`; the SDK errors
+  carry `retryAfter`/`retry_after` and `rateLimit`/`rate_limit`. Customers take
+  `limits` (`per_intent`, `monthly`) and the balance reports
+  `per_intent_limit`.
+- MCP: sessions (`Mcp-Session-Id`) and Server-Sent Events progress, tasks on
+  `2025-11-25`, elicitation of plain questions, and OAuth sign-in for clients
+  that support it.
+
 ## [0.2.0]
 
 ### Added

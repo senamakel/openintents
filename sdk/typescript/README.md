@@ -106,6 +106,48 @@ await oi.sessions.release(session.id); // the profile keeps the sign-in
 Also `oi.sessions.list/listAll/get/getCommand/listEvents` and
 `oi.profiles.list/listAll/create/get/forget`.
 
+### Country, waiting and forms
+
+`country` (ISO 3166-1 alpha-2, lowercase) or `end_user_ip` on `intents.create`,
+`sessions.create`, `signIns.create` and `customers.createPortalSession` picks
+the country the browser goes out from; the object says which in `country` and
+`country_source`. Pass `{ wait: 30 }` as the second argument of
+`intents.create` or `intents.get` to have the API hold the request up to 50
+seconds until the intent finishes or pauses (`Prefer: wait`).
+
+A question in `input_request` can offer `choices` (answer with one's `id`) or
+ask a form of `fields` (answer with `{ input, values: { name: value } }`);
+`expects` says what a plain answer looks like. A `sensitive` question (an
+identity document) is answered only on `input_request.url`.
+
+### Secrets, sign-ins and live links
+
+```ts
+const card = await oi.secrets.create({ kind: "card", label: "Work Visa", fields: { number: "4242424242424242", /* … */ }, shops: ["airfrance.com"] });
+await oi.intents.create({ intent: "book the 7am flight", secrets: [card.id], shops: ["airfrance.com"] });
+
+const ask = await oi.customers.createSecretRequest("cus_4b81d0", { kinds: ["identity_document"] }); // send ask.url
+const signIn = await oi.signIns.create({ shop_url: "https://www.amazon.com/", customer: "cus_4b81d0" }); // send signIn.url
+const portal = await oi.customers.createPortalSession("cus_4b81d0", { ttl_seconds: 1800 }); // send portal.url
+const live = await oi.sessions.createLiveLink(session.id); // live.url drives the session, never to pay
+```
+
+Secrets are write-only: they come back as a label, a mask and public fields,
+never their values (`oi.secrets.list/get/replace/delete/uses`).
+
+### Webhook endpoints
+
+```ts
+const endpoint = await oi.webhookEndpoints.create({ url: "https://example.com/hooks", events: ["intent.completed", "sign_in.completed"] });
+// endpoint.secret is shown here only. Also: list/listAll/get/update/delete,
+await oi.webhookEndpoints.rotateSecret(endpoint.id); // the old secret signs for 24 more hours
+await oi.webhookEndpoints.test(endpoint.id);          // sends webhook_endpoint.test to it alone
+await oi.webhookEndpoints.listDeliveries(endpoint.id);
+```
+
+A 429 `OpenIntentsError` carries `retryAfter` and `rateLimit` (`limit`,
+`remaining`, `reset`, from the `RateLimit-*` headers).
+
 ### Webhooks
 
 ```ts
